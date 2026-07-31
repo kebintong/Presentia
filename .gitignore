@@ -1,0 +1,11 @@
+.venv/
+.venv-win/
+.local-libs/
+__pycache__/
+*.pyc
+attendance.db
+models/
+*.csv
+build/
+dist/
+*.log
