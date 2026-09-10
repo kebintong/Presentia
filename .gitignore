@@ -9,3 +9,4 @@ models/
 build/
 dist/
 *.log
+node_modules/

@@ -5,3 +5,7 @@ insightface>=0.7.3
 onnxruntime>=1.17
 mediapipe>=0.10.14,<1.0
 mss>=9.0
+fastapi>=0.111
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+websockets>=12
