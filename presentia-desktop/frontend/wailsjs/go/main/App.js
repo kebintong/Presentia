@@ -62,6 +62,10 @@ export function SetAlwaysOnTop(arg1, arg2) {
   return window['go']['main']['App']['SetAlwaysOnTop'](arg1, arg2);
 }
 
+export function SetBubbleTheme(arg1) {
+  return window['go']['main']['App']['SetBubbleTheme'](arg1);
+}
+
 export function SidecarURL() {
   return window['go']['main']['App']['SidecarURL']();
 }

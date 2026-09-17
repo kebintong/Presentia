@@ -56,13 +56,16 @@ var (
 	bGetModuleHandleW           = bKernel32.NewProc("GetModuleHandleW")
 
 	// gdi32.dll — drawing objects and device-context state
-	bCreateSolidBrush  = bGdi32.NewProc("CreateSolidBrush")
-	bDeleteObject      = bGdi32.NewProc("DeleteObject")
-	bSelectObject      = bGdi32.NewProc("SelectObject")
-	bCreateFontW       = bGdi32.NewProc("CreateFontW")
-	bSetTextColor      = bGdi32.NewProc("SetTextColor")
-	bSetBkMode         = bGdi32.NewProc("SetBkMode")
-	bCreateEllipticRgn = bGdi32.NewProc("CreateEllipticRgn")
+	bCreateSolidBrush   = bGdi32.NewProc("CreateSolidBrush")
+	bDeleteObject       = bGdi32.NewProc("DeleteObject")
+	bSelectObject       = bGdi32.NewProc("SelectObject")
+	bCreateFontW        = bGdi32.NewProc("CreateFontW")
+	bSetTextColor       = bGdi32.NewProc("SetTextColor")
+	bSetBkMode          = bGdi32.NewProc("SetBkMode")
+	bCreateEllipticRgn  = bGdi32.NewProc("CreateEllipticRgn")
+	bCreateRoundRectRgn = bGdi32.NewProc("CreateRoundRectRgn")
+	bFillRgn            = bGdi32.NewProc("FillRgn")
+	bFrameRgn           = bGdi32.NewProc("FrameRgn")
 )
 
 const (
@@ -134,18 +137,74 @@ type bPAINTSTRUCT struct {
 
 func bgr(r, g, b byte) uint32 { return uint32(b) | (uint32(g) << 8) | (uint32(r) << 16) }
 
-// Palette matched to the app's flat theme (accent #1C77C3 on #16203A).
-var (
-	clBubble   = bgr(28, 119, 195)  // Presentia blue
-	clMenuBg   = bgr(22, 32, 58)    // surface
-	clMenuBord = bgr(38, 50, 74)    // border
-	clText     = bgr(232, 237, 246) // ink
-	clMuted    = bgr(147, 161, 184) // muted
-	clHover    = bgr(34, 48, 79)    // row hover
-	clAccent   = bgr(28, 119, 195)
-	clEmerald  = bgr(16, 185, 129)
-	clRed      = bgr(239, 68, 68)
-)
+// The bubble is painted with GDI, so the app's CSS tokens are mirrored here.
+// Keep these in step with :root and [data-theme="light"] in style.css.
+type bTheme struct {
+	surface    uint32 // --surface
+	border     uint32 // --glass-border
+	ink        uint32 // --ink-heading
+	muted      uint32 // --muted
+	hover      uint32 // --card-row-hover
+	rowBg      uint32 // --card-row-bg
+	accent     uint32 // --accent
+	accentDeep uint32 // --accent-deep
+	accentTint uint32 // flattened --accent-tint (GDI has no alpha here)
+	onAccent   uint32 // text on an accent fill
+	ok         uint32 // --present
+	danger     uint32 // --missing
+}
+
+var bDark = bTheme{
+	surface:    bgr(22, 32, 58),    // #16203A
+	border:     bgr(38, 50, 74),    // #26324A
+	ink:        bgr(255, 255, 255), // #FFFFFF
+	muted:      bgr(147, 161, 184), // #93A1B8
+	hover:      bgr(34, 48, 79),    // #22304F
+	rowBg:      bgr(26, 36, 64),    // #1A2440
+	accent:     bgr(28, 119, 195),  // #1C77C3
+	accentDeep: bgr(21, 92, 160),   // #155CA0
+	accentTint: bgr(29, 47, 78),    // #1C77C3 @16% over --surface
+	onAccent:   bgr(255, 255, 255),
+	ok:         bgr(16, 185, 129), // #10B981
+	danger:     bgr(239, 68, 68),  // #EF4444
+}
+
+var bLight = bTheme{
+	surface:    bgr(255, 255, 255), // #FFFFFF
+	border:     bgr(226, 232, 240), // #E2E8F0
+	ink:        bgr(15, 23, 42),    // #0F172A
+	muted:      bgr(90, 103, 121),  // #5A6779
+	hover:      bgr(235, 239, 245), // #EBEFF5
+	rowBg:      bgr(245, 247, 250), // #F5F7FA
+	accent:     bgr(28, 119, 195),  // #1C77C3
+	accentDeep: bgr(21, 92, 160),   // #155CA0
+	accentTint: bgr(232, 241, 249), // #1C77C3 @10% over white
+	onAccent:   bgr(255, 255, 255),
+	ok:         bgr(5, 150, 105), // #059669
+	danger:     bgr(220, 38, 38), // #DC2626
+}
+
+// gDarkTheme follows the app's theme switch; the frontend pushes changes
+// through SetBubbleTheme so the bubble never looks foreign next to the window.
+var gDarkTheme = true
+
+func th() bTheme {
+	if gDarkTheme {
+		return bDark
+	}
+	return bLight
+}
+
+// setBubbleThemeNative repaints the bubble and any open menu in the new theme.
+func setBubbleThemeNative(dark bool) {
+	gDarkTheme = dark
+	if gBubbleHwnd != 0 {
+		bInvalidateRect.Call(gBubbleHwnd, 0, 1)
+	}
+	if gMenuHwnd != 0 {
+		bInvalidateRect.Call(gMenuHwnd, 0, 1)
+	}
+}
 
 // Strings handed to Win32 live at package scope so the garbage collector can
 // never reclaim them mid-call. A *uint16 passed as a uintptr argument is
@@ -162,31 +221,50 @@ var (
 
 // menu items
 type bMenuItem struct {
-	label   string
-	sub     string
-	cmd     string
-	iconClr uint32
+	label string
+	sub   string
+	cmd   string
+	tone  string // "accent" | "ok" | "danger" - resolved against the live theme
 }
 
 var bMenuItems = []bMenuItem{
-	{"Select Screen Area", "Drag a region over the meeting", "bubble:screen_area", clAccent},
-	{"Select Window", "Pick an open app window", "bubble:win_picker", clAccent},
-	{"Live Monitor", "Start face tracking", "bubble:launch", clEmerald},
-	{"Stop Monitor", "End session and save", "bubble:stop", clRed},
-	{"", "", "", 0}, // divider
+	{"Select Screen Area", "Drag a region over the meeting", "bubble:screen_area", "accent"},
+	{"Select Window", "Pick an open app window", "bubble:win_picker", "accent"},
+	{"Live Monitor", "Start face tracking", "bubble:launch", "ok"},
+	{"Stop Monitor", "End session and save", "bubble:stop", "danger"},
+	{"", "", "", ""}, // divider
 	// Handled inside the bubble rather than by the frontend, so it works no
 	// matter which page the app is on.
-	{"Display on Top", "Pin Presentia above other windows", "bubble:pin", clAccent},
-	{"Quit Bubble", "Restore Presentia", "bubble:quit", clRed},
+	{"Display on Top", "Pin Presentia above other windows", "bubble:pin", "accent"},
+	{"Quit Bubble", "Restore Presentia", "bubble:quit", "danger"},
+}
+
+// toneColour resolves a menu item's role against the current theme.
+func toneColour(tone string) uint32 {
+	t := th()
+	switch tone {
+	case "ok":
+		return t.ok
+	case "danger":
+		return t.danger
+	default:
+		return t.accent
+	}
 }
 
 const (
 	bBubbleW = 64
 	bBubbleH = 64
-	bMenuW   = 290
-	bItemH   = 56
-	bHdrH    = 34
+	bMenuW   = 300
+	bItemH   = 54
+	bHdrH    = 36
 	bPad     = 8
+
+	bMenuRadius = 12 // matches --radius-xl on the app's cards
+	bRowRadius  = 8  // matches --radius-md on .card-row
+	bIconSize   = 30
+	bIconRadius = 8
+	bTextX      = 58 // icon (14 + 30) + 14px gap
 )
 
 // ── Global state ─────────────────────────────────────────────────────────────
@@ -286,6 +364,57 @@ func fillRect(hdc uintptr, rc *bRECT, colour uint32) {
 	bFillRect.Call(hdc, uintptr(unsafe.Pointer(rc)), br)
 	runtime.KeepAlive(rc)
 	bDeleteObject.Call(br)
+}
+
+// fillRound paints a filled rounded rectangle, the shape the app uses for
+// cards, rows and icon badges.
+func fillRound(hdc uintptr, rc bRECT, radius int32, colour uint32) {
+	rgn, _, _ := bCreateRoundRectRgn.Call(
+		uintptr(rc.Left), uintptr(rc.Top), uintptr(rc.Right), uintptr(rc.Bottom),
+		uintptr(radius), uintptr(radius))
+	if rgn == 0 {
+		return
+	}
+	defer bDeleteObject.Call(rgn)
+	br, _, _ := bCreateSolidBrush.Call(uintptr(colour))
+	if br == 0 {
+		return
+	}
+	defer bDeleteObject.Call(br)
+	bFillRgn.Call(hdc, rgn, br)
+}
+
+// frameRound draws a 1px rounded outline - the app's "1px border" look.
+func frameRound(hdc uintptr, rc bRECT, radius int32, colour uint32) {
+	rgn, _, _ := bCreateRoundRectRgn.Call(
+		uintptr(rc.Left), uintptr(rc.Top), uintptr(rc.Right), uintptr(rc.Bottom),
+		uintptr(radius), uintptr(radius))
+	if rgn == 0 {
+		return
+	}
+	defer bDeleteObject.Call(rgn)
+	br, _, _ := bCreateSolidBrush.Call(uintptr(colour))
+	if br == 0 {
+		return
+	}
+	defer bDeleteObject.Call(br)
+	bFrameRgn.Call(hdc, rgn, br, 1, 1)
+}
+
+// fillEllipse paints a filled circle, used for the bubble body and icon dots.
+func fillEllipse(hdc uintptr, rc bRECT, colour uint32) {
+	rgn, _, _ := bCreateEllipticRgn.Call(
+		uintptr(rc.Left), uintptr(rc.Top), uintptr(rc.Right), uintptr(rc.Bottom))
+	if rgn == 0 {
+		return
+	}
+	defer bDeleteObject.Call(rgn)
+	br, _, _ := bCreateSolidBrush.Call(uintptr(colour))
+	if br == 0 {
+		return
+	}
+	defer bDeleteObject.Call(br)
+	bFillRgn.Call(hdc, rgn, br)
 }
 
 // loWord / hiWord extract the signed mouse coordinates from an LPARAM.
@@ -418,20 +547,38 @@ func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 
 func drawBubble(hdc uintptr) {
 	ensureFonts()
-	rc := bRECT{Right: bBubbleW, Bottom: bBubbleH}
-	fillRect(hdc, &rc, clBubble)
+	t := th()
+
+	full := bRECT{Right: bBubbleW, Bottom: bBubbleH}
+	// The window region already clips to a circle; painting the surface colour
+	// first keeps the edge clean against whatever is behind it.
+	fillRect(hdc, &full, t.surface)
+	fillEllipse(hdc, full, t.accent)
+
+	// A slightly deeper ring, echoing the app's 1px button border.
+	ring := bRECT{Left: 1, Top: 1, Right: bBubbleW - 1, Bottom: bBubbleH - 1}
+	rgn, _, _ := bCreateEllipticRgn.Call(
+		uintptr(ring.Left), uintptr(ring.Top), uintptr(ring.Right), uintptr(ring.Bottom))
+	if rgn != 0 {
+		if br, _, _ := bCreateSolidBrush.Call(uintptr(t.accentDeep)); br != 0 {
+			bFrameRgn.Call(hdc, rgn, br, 2, 2)
+			bDeleteObject.Call(br)
+		}
+		bDeleteObject.Call(rgn)
+	}
 
 	if gFontBubble != 0 {
 		bSelectObject.Call(hdc, gFontBubble)
 	}
 	bSetBkMode.Call(hdc, bTransparent)
-	bSetTextColor.Call(hdc, uintptr(clText))
+	bSetTextColor.Call(hdc, uintptr(t.onAccent))
 
-	label := "M"
+	// "P" matches the brand emblem in the title bar; "x" while the menu is up.
+	label := "P"
 	if gMenuOpen {
-		label = "×" // ×
+		label = "\u00D7"
 	}
-	drawText(hdc, label, &rc, uintptr(bDtCenter|bDtVCenter|bDtSingleLine))
+	drawText(hdc, label, &full, uintptr(bDtCenter|bDtVCenter|bDtSingleLine))
 }
 
 // ── Menu window procedure ─────────────────────────────────────────────────────
@@ -506,42 +653,53 @@ func menuHeight() int32 {
 }
 
 func drawMenu(hdc, hwnd uintptr) {
+	ensureFonts()
+	t := th()
+
 	var rc bRECT
 	bGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
 
-	// Background + border
-	fillRect(hdc, &rc, clMenuBord)
-	inner := bRECT{Left: rc.Left + 1, Top: rc.Top + 1, Right: rc.Right - 1, Bottom: rc.Bottom - 1}
-	fillRect(hdc, &inner, clMenuBg)
+	// Card surface with a 1px border, same as .launcher-card.
+	fillRect(hdc, &rc, t.surface)
+	fillRound(hdc, rc, bMenuRadius, t.surface)
+	frameRound(hdc, rc, bMenuRadius, t.border)
 
-	ensureFonts()
 	bSetBkMode.Call(hdc, bTransparent)
 
-	// Header
+	// Section label, matching .field-label
 	bSelectObject.Call(hdc, gFontHdr)
-	bSetTextColor.Call(hdc, uintptr(clMuted))
-	hdrRc := bRECT{Left: int32(bPad * 2), Top: 8, Right: int32(bMenuW - bPad*2), Bottom: int32(bHdrH)}
+	bSetTextColor.Call(hdc, uintptr(t.muted))
+	hdrRc := bRECT{Left: 16, Top: 10, Right: int32(bMenuW - 16), Bottom: int32(bHdrH)}
 	bDrawTextW.Call(hdc, uintptr(unsafe.Pointer(bHdrMenuCaption)), ^uintptr(0),
 		uintptr(unsafe.Pointer(&hdrRc)), uintptr(bDtVCenter|bDtSingleLine))
 	runtime.KeepAlive(&hdrRc)
 
-	// Items
 	yOff := int32(bHdrH)
 	for i, item := range bMenuItems {
 		if item.label == "" {
-			divRc := bRECT{Left: int32(bPad * 2), Top: yOff + 5, Right: int32(bMenuW - bPad*2), Bottom: yOff + 6}
-			fillRect(hdc, &divRc, clMenuBord)
+			divRc := bRECT{Left: 16, Top: yOff + 5, Right: int32(bMenuW - 16), Bottom: yOff + 6}
+			fillRect(hdc, &divRc, t.border)
 			yOff += 12
 			continue
 		}
 
+		// Hovered row: filled rounded rectangle, like .card-row:hover
 		if i == gHoveredItem {
-			hvRc := bRECT{Left: int32(bPad / 2), Top: yOff + 2, Right: int32(bMenuW - bPad/2), Bottom: yOff + bItemH - 2}
-			fillRect(hdc, &hvRc, clHover)
+			hvRc := bRECT{Left: 8, Top: yOff + 2, Right: int32(bMenuW - 8), Bottom: yOff + bItemH - 2}
+			fillRound(hdc, hvRc, bRowRadius, t.hover)
 		}
 
-		iconRc := bRECT{Left: int32(bPad * 2), Top: yOff + (bItemH-22)/2, Right: int32(bPad*2 + 22), Bottom: yOff + (bItemH+22)/2}
-		fillRect(hdc, &iconRc, item.iconClr)
+		// Icon badge: tinted rounded square with a 1px border, like
+		// .card-icon-badge, with a solid dot of the item's tone inside.
+		iy := yOff + (bItemH-bIconSize)/2
+		iconRc := bRECT{Left: 14, Top: iy, Right: 14 + bIconSize, Bottom: iy + bIconSize}
+		fillRound(hdc, iconRc, bIconRadius, t.accentTint)
+		frameRound(hdc, iconRc, bIconRadius, t.border)
+		dot := bRECT{
+			Left: iconRc.Left + 10, Top: iconRc.Top + 10,
+			Right: iconRc.Right - 10, Bottom: iconRc.Bottom - 10,
+		}
+		fillEllipse(hdc, dot, toneColour(item.tone))
 
 		// The pin entry is a toggle, so its wording reflects current state.
 		label, sub := item.label, item.sub
@@ -550,13 +708,13 @@ func drawMenu(hdc, hwnd uintptr) {
 		}
 
 		bSelectObject.Call(hdc, gFontTitle)
-		bSetTextColor.Call(hdc, uintptr(clText))
-		tRc := bRECT{Left: int32(bPad*2 + 30), Top: yOff + 9, Right: int32(bMenuW - bPad*2), Bottom: yOff + 30}
+		bSetTextColor.Call(hdc, uintptr(t.ink))
+		tRc := bRECT{Left: bTextX, Top: yOff + 8, Right: int32(bMenuW - 14), Bottom: yOff + 28}
 		drawText(hdc, label, &tRc, uintptr(bDtSingleLine))
 
 		bSelectObject.Call(hdc, gFontSub)
-		bSetTextColor.Call(hdc, uintptr(clMuted))
-		sRc := bRECT{Left: int32(bPad*2 + 30), Top: yOff + 31, Right: int32(bMenuW - bPad*2), Bottom: yOff + bItemH - 4}
+		bSetTextColor.Call(hdc, uintptr(t.muted))
+		sRc := bRECT{Left: bTextX, Top: yOff + 28, Right: int32(bMenuW - 14), Bottom: yOff + bItemH - 4}
 		drawText(hdc, sub, &sRc, uintptr(bDtSingleLine))
 
 		yOff += bItemH
@@ -572,7 +730,7 @@ func registerClasses(hInst uintptr) {
 		ensureWndProcs()
 		cursor, _, _ := bLoadCursorW.Call(0, 32512) // IDC_ARROW
 
-		bubbleBr, _, _ := bCreateSolidBrush.Call(uintptr(clBubble))
+		bubbleBr, _, _ := bCreateSolidBrush.Call(uintptr(bDark.surface))
 		wcBubble := bWNDCLASSEX{
 			CbSize:        uint32(unsafe.Sizeof(bWNDCLASSEX{})),
 			LpfnWndProc:   gBubbleWndProc,
@@ -583,7 +741,7 @@ func registerClasses(hInst uintptr) {
 		}
 		bRegisterClassExW.Call(uintptr(unsafe.Pointer(&wcBubble)))
 
-		menuBr, _, _ := bCreateSolidBrush.Call(uintptr(clMenuBg))
+		menuBr, _, _ := bCreateSolidBrush.Call(uintptr(bDark.surface))
 		wcMenu := bWNDCLASSEX{
 			CbSize:        uint32(unsafe.Sizeof(bWNDCLASSEX{})),
 			LpfnWndProc:   gMenuWndProc,
@@ -641,6 +799,13 @@ func openMenu(bubbleHwnd uintptr) {
 		return
 	}
 	gMenuHwnd = h
+	// Clip the window to a rounded rectangle so the corners are genuinely
+	// round rather than painted over a square frame.
+	if rgn, _, _ := bCreateRoundRectRgn.Call(0, 0,
+		uintptr(bMenuW+1), uintptr(mh+1),
+		uintptr(bMenuRadius*2), uintptr(bMenuRadius*2)); rgn != 0 {
+		bSetWindowRgn.Call(h, rgn, 1)
+	}
 	bShowWindow.Call(h, 5)
 	bUpdateWindow.Call(h)
 }

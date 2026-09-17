@@ -32,6 +32,8 @@ export function SaveCSVToFile(arg1:string,arg2:string):Promise<string>;
 
 export function SetAlwaysOnTop(arg1:boolean,arg2:boolean):Promise<void>;
 
+export function SetBubbleTheme(arg1:boolean):Promise<void>;
+
 export function SidecarURL():Promise<string>;
 
 export function WindowClose():Promise<void>;

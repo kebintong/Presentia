@@ -356,8 +356,14 @@ func (a *App) OpenBubble() {
 	OpenFloatingBubble(a)
 }
 
+// SetBubbleTheme keeps the native bubble in step with the app's dark/light
+// setting. The bubble is painted with GDI and cannot read the stylesheet, so
+// the frontend pushes the current theme down whenever it changes.
+func (a *App) SetBubbleTheme(dark bool) {
+	setBubbleThemeNative(dark)
+}
+
 // CloseBubble destroys the native bubble window.
 func (a *App) CloseBubble() {
 	CloseFloatingBubble()
 }
-

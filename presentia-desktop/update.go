@@ -15,7 +15,7 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 // Update checking
 //
 // Presentia does not update itself. It asks GitHub what the newest release is
@@ -27,20 +27,20 @@ import (
 //
 // Nothing here can break the app: every failure path is silent and simply
 // reports "no update available".
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 // AppVersion is the version of this build.
 //
 // IMPORTANT: keep this in sync with MyAppVersion in build/installer.iss and
 // with the git tag you publish. If this is lower than the newest release tag,
-// users see the update banner â€” that comparison is the whole mechanism.
-const AppVersion = "1.2.0"
+// users see the update banner — that comparison is the whole mechanism.
+const AppVersion = "1.2.1"
 
 // GitHubRepo is the "owner/name" of the repository whose Releases are checked.
 //
 // The repository must be public for unauthenticated clients to read its
 // releases. If it is ever made private, update checking simply stops finding
-// releases â€” it does not break the app.
+// releases — it does not break the app.
 const GitHubRepo = "kebintong/Presentia"
 
 // How long to wait before asking GitHub again.
@@ -51,7 +51,7 @@ const GitHubRepo = "kebintong/Presentia"
 // lab of any size far below the limit.
 //
 // If you ever do hit the limit, point manifestURL at a plain JSON file
-// instead (raw.githubusercontent.com has no API rate limit) â€” the only thing
+// instead (raw.githubusercontent.com has no API rate limit) — the only thing
 // that has to change is parseRelease.
 const updateCheckInterval = 24 * time.Hour
 
@@ -111,7 +111,7 @@ func (a *App) CheckForUpdate(force bool) (UpdateInfo, error) {
 
 	rel, err := fetchLatestRelease()
 	if err != nil {
-		// Offline, rate-limited, or GitHub is down â€” report no update and let
+		// Offline, rate-limited, or GitHub is down — report no update and let
 		// the next check try again.
 		if a.ctx != nil {
 			wailsruntime.LogInfo(a.ctx, "Update check skipped: "+err.Error())
@@ -152,9 +152,9 @@ func (a *App) OpenDownloadPage(url string) {
 	wailsruntime.BrowserOpenURL(a.ctx, url)
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 // In-app download and install
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────────
 
 // isTrustedUpdateURL guards every network and exec path below. The URL comes
 // from a JSON cache on disk, so it is not automatically trustworthy.
@@ -261,7 +261,7 @@ func (a *App) DownloadUpdate(url string) (string, error) {
 // InstallUpdate launches the downloaded installer and closes Presentia.
 //
 // The app MUST exit for the installer to replace its own files, so this does
-// not return in any meaningful sense â€” the frontend should have already warned
+// not return in any meaningful sense — the frontend should have already warned
 // the user. Inno Setup relaunches Presentia when it finishes.
 func (a *App) InstallUpdate(installerPath string) error {
 	if a.ctx == nil {
@@ -286,7 +286,7 @@ func (a *App) InstallUpdate(installerPath string) error {
 	}
 	// Let Setup get going before we vanish, then quit so our files unlock.
 	// Quitting also closes the job object, which takes the sidecar down with
-	// us â€” that is what frees the install folder.
+	// us — that is what frees the install folder.
 	go func() {
 		time.Sleep(1200 * time.Millisecond)
 		wailsruntime.Quit(a.ctx)
@@ -294,7 +294,7 @@ func (a *App) InstallUpdate(installerPath string) error {
 	return nil
 }
 
-// â”€â”€ internals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── internals ────────────────────────────────────────────────────────────────
 
 func fetchLatestRelease() (*ghRelease, error) {
 	manifestURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", GitHubRepo)

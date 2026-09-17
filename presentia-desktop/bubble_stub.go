@@ -3,5 +3,6 @@
 package main
 
 // Stubs for non-Windows platforms.
-func OpenFloatingBubble(a *App) {}
-func CloseFloatingBubble()      {}
+func OpenFloatingBubble(a *App)      {}
+func CloseFloatingBubble()           {}
+func setBubbleThemeNative(dark bool) {}

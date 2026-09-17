@@ -29,6 +29,9 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('presentia-theme', theme)
+    // The floating bubble is a native Win32 window painted with GDI, so it
+    // cannot read the stylesheet — push the theme down to it explicitly.
+    goApp()?.['SetBubbleTheme']?.(theme === 'dark')
   }, [theme])
 
   const toggleTheme = () => {
