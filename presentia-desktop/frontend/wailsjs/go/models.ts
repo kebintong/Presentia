@@ -22,7 +22,6 @@ export namespace main {
 	        this.checkedAt = source["checkedAt"];
 	    }
 	}
-	
 	export class WindowInfo {
 	    title: string;
 	    left: number;

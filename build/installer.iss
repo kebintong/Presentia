@@ -1,4 +1,4 @@
-﻿; installer.iss â€” Inno Setup script for Presentia
+; installer.iss â€” Inno Setup script for Presentia
 ;
 ; Prereqs before compiling this (see BUILD.md for the full pipeline):
 ;   1. cd presentia-desktop/frontend && npm install && cd ../..

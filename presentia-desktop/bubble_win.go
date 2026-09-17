@@ -186,11 +186,26 @@ var (
 	gClassOnce   sync.Once
 )
 
-// Package-level callbacks — must NOT be GC'd.
+// Package-level callbacks — must NOT be GC'd, so they are stored here rather
+// than in a local.
+//
+// They are assigned lazily instead of by a var initializer: bubbleWndProc
+// reaches registerClasses (via openMenu), and registerClasses needs these same
+// variables, which Go rejects at compile time as an initialization cycle.
+// Assigning inside a function breaks the cycle without changing behaviour —
+// the values are still created exactly once and live for the whole process.
 var (
-	gBubbleWndProc = syscall.NewCallback(bubbleWndProc)
-	gMenuWndProc   = syscall.NewCallback(menuWndProc)
+	gProcOnce      sync.Once
+	gBubbleWndProc uintptr
+	gMenuWndProc   uintptr
 )
+
+func ensureWndProcs() {
+	gProcOnce.Do(func() {
+		gBubbleWndProc = syscall.NewCallback(bubbleWndProc)
+		gMenuWndProc = syscall.NewCallback(menuWndProc)
+	})
+}
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
 
@@ -442,6 +457,7 @@ func drawMenu(hdc, hwnd uintptr) {
 // Re-registering on every open leaked a brush each time and failed silently.
 func registerClasses(hInst uintptr) {
 	gClassOnce.Do(func() {
+		ensureWndProcs()
 		cursor, _, _ := bLoadCursorW.Call(0, 32512) // IDC_ARROW
 
 		bubbleBr, _, _ := bCreateSolidBrush.Call(uintptr(clBubble))

@@ -1,5 +1,5 @@
 <#
-  set-version.ps1 — set Presentia's version number in every place it appears.
+  set-version.ps1 - set Presentia's version number in every place it appears.
 
   The version lives in three files, and they MUST agree with the git tag you
   publish. If presentia-desktop/update.go says 1.0.0 but you tag the release
@@ -34,6 +34,19 @@ foreach ($f in @($updateGo, $issFile, $wailsJson)) {
 $goPattern  = 'const\s+AppVersion\s*=\s*"([^"]*)"'
 $issPattern = '#define\s+MyAppVersion\s+"([^"]*)"'
 
+# Write UTF-8 with NO byte-order mark.
+#
+# Windows PowerShell 5.1 always prepends a BOM when asked for UTF8 output, and
+# a BOM in wails.json makes the build fail outright with:
+#     invalid character '\ufeff' looking for beginning of value
+# .NET's UTF8Encoding($false) is the portable way to avoid it, and works the
+# same in PowerShell 5.1 and 7.
+function Write-Utf8NoBom {
+    param([string]$Path, [string]$Text)
+    $enc = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Text, $enc)
+}
+
 function Get-Current {
     $go  = [regex]::Match((Get-Content $updateGo  -Raw), $goPattern).Groups[1].Value
     $iss = [regex]::Match((Get-Content $issFile   -Raw), $issPattern).Groups[1].Value
@@ -54,7 +67,7 @@ if ($Check -or -not $Version) {
         Write-Host "  All in sync at $($all[0])." -ForegroundColor Green
         Write-Host "  Publish as tag: v$($all[0])"
     } else {
-        Write-Host '  MISMATCH — run this script with a version to fix.' -ForegroundColor Red
+        Write-Host '  MISMATCH - run this script with a version to fix.' -ForegroundColor Red
     }
     Write-Host ''
     if (-not $Version) { return }
@@ -68,15 +81,15 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 $src = Get-Content $updateGo -Raw
 if ($src -notmatch $goPattern) { throw "Could not find 'const AppVersion' in update.go" }
 $src = [regex]::Replace($src, $goPattern, "const AppVersion = `"$Version`"")
-Set-Content -Path $updateGo -Value $src -NoNewline -Encoding UTF8
+Write-Utf8NoBom -Path $updateGo -Text $src
 
 # installer.iss
 $src = Get-Content $issFile -Raw
 if ($src -notmatch $issPattern) { throw "Could not find '#define MyAppVersion' in installer.iss" }
 $src = [regex]::Replace($src, $issPattern, "#define MyAppVersion `"$Version`"")
-Set-Content -Path $issFile -Value $src -NoNewline -Encoding UTF8
+Write-Utf8NoBom -Path $issFile -Text $src
 
-# wails.json — stamps the version into the exe's file properties
+# wails.json - stamps the version into the exe's file properties
 $wj = Get-Content $wailsJson -Raw | ConvertFrom-Json
 if (-not $wj.info) {
     $wj | Add-Member -MemberType NoteProperty -Name info -Value ([PSCustomObject]@{})
@@ -93,7 +106,7 @@ foreach ($k in $fields.Keys) {
     else { $wj.info | Add-Member -MemberType NoteProperty -Name $k -Value $fields[$k] }
 }
 $wj.info.productVersion = $Version
-($wj | ConvertTo-Json -Depth 10) | Set-Content -Path $wailsJson -Encoding UTF8
+Write-Utf8NoBom -Path $wailsJson -Text (($wj | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
 
 Write-Host ''
 Write-Host "  Version set to $Version in all three files." -ForegroundColor Green
