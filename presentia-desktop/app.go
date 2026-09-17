@@ -155,6 +155,11 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.sidecar = cmd
+
+	// Tie the sidecar's lifetime to ours at the OS level. Without this, a
+	// crash or an End Task leaves presentia-sidecar.exe running, holding the
+	// install folder open so upgrades and uninstalls fail with "file in use".
+	superviseChild(cmd.Process.Pid)
 	wailsruntime.LogInfo(ctx, "Python sidecar started (pid "+fmt.Sprint(cmd.Process.Pid)+")")
 
 	// Poll until the sidecar health endpoint responds (up to 120 s for model load)

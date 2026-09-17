@@ -1,20 +1,20 @@
 {
-  "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "Presentia",
-  "outputfilename": "Presentia",
-  "frontend:install": "npm install",
-  "frontend:build": "npm run build",
-  "frontend:dev:watcher": "npm run dev",
-  "frontend:dev:serverUrl": "auto",
-  "author": {
-    "name": "Presentia Team",
-    "email": ""
-  },
-  "info": {
-    "copyright": "Presentia Team",
-    "productName": "Presentia",
-    "productVersion": "1.0.0",
-    "comments": "AI-Powered Virtual Classroom Attendance System",
-    "companyName": "Presentia Team"
-  }
+    "$schema":  "https://wails.io/schemas/config.v2.json",
+    "name":  "Presentia",
+    "outputfilename":  "Presentia",
+    "frontend:install":  "npm install",
+    "frontend:build":  "npm run build",
+    "frontend:dev:watcher":  "npm run dev",
+    "frontend:dev:serverUrl":  "auto",
+    "author":  {
+                   "name":  "Presentia Team",
+                   "email":  ""
+               },
+    "info":  {
+                 "companyName":  "Presentia Team",
+                 "productName":  "Presentia",
+                 "productVersion":  "1.2.0",
+                 "copyright":  "Presentia Team",
+                 "comments":  "AI-Powered Virtual Classroom Attendance System"
+             }
 }

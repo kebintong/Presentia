@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import TopBar from './components/TopBar'
 import Sidebar from './components/Sidebar'
-import UpdateBanner, { UpdateInfo } from './components/UpdateBanner'
+import SettingsPanel, { UpdateInfo } from './components/SettingsPanel'
 import RegisterPage from './pages/RegisterPage'
 import MeetPage from './pages/MeetPage'
 import SessionPage from './pages/SessionPage'
@@ -86,8 +86,15 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [])
 
-  const openDownload = (url: string) => {
-    goApp()?.['OpenDownloadPage']?.(url)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // Manual re-check from the Settings panel, bypassing the daily throttle.
+  const recheckUpdate = async (): Promise<UpdateInfo | null> => {
+    const app = goApp()
+    if (!app) return null
+    const info: UpdateInfo = await app['CheckForUpdate'](true)
+    setUpdate(info?.available ? info : null)
+    return info
   }
 
   const PAGE_COMPONENTS: Record<Page, React.ReactNode> = {
@@ -117,13 +124,24 @@ export default function App() {
             active={page}
             onNavigate={setPage}
             engineReady={engineReady}
+            onOpenSettings={() => setSettingsOpen(true)}
+            updateAvailable={!!update?.available}
           />
           <main className="main-viewport">
-            <UpdateBanner info={update} onDownload={openDownload} />
             {PAGE_COMPONENTS[page]}
           </main>
         </div>
       </div>
+
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        update={update}
+        version={version}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onRecheck={recheckUpdate}
+      />
     </>
   )
 }

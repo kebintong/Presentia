@@ -10,6 +10,10 @@ export function CloseBubble() {
   return window['go']['main']['App']['CloseBubble']();
 }
 
+export function DownloadUpdate(arg1) {
+  return window['go']['main']['App']['DownloadUpdate'](arg1);
+}
+
 export function EnterPickerMode() {
   return window['go']['main']['App']['EnterPickerMode']();
 }
@@ -24,6 +28,10 @@ export function GetAppVersion() {
 
 export function GetOpenWindows() {
   return window['go']['main']['App']['GetOpenWindows']();
+}
+
+export function InstallUpdate(arg1) {
+  return window['go']['main']['App']['InstallUpdate'](arg1);
 }
 
 export function OpenBubble() {

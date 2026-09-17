@@ -48,6 +48,10 @@ var (
 	bGetWindowRect              = bUser32.NewProc("GetWindowRect")
 	bLoadCursorW                = bUser32.NewProc("LoadCursorW")
 	bSetWindowRgn               = bUser32.NewProc("SetWindowRgn")
+	bSetCapture                 = bUser32.NewProc("SetCapture")
+	bReleaseCapture             = bUser32.NewProc("ReleaseCapture")
+	bGetCursorPos               = bUser32.NewProc("GetCursorPos")
+	bSetWindowPos               = bUser32.NewProc("SetWindowPos")
 	bGetCurrentThreadId         = bKernel32.NewProc("GetCurrentThreadId")
 	bGetModuleHandleW           = bKernel32.NewProc("GetModuleHandleW")
 
@@ -75,10 +79,19 @@ const (
 	bWmClose       = 0x0010
 	bWmPaint       = 0x000F
 	bWmLButtonDown = 0x0201
+	bWmLButtonUp   = 0x0202
 	bWmRButtonDown = 0x0204
 	bWmMouseMove   = 0x0200
 	bWmNcHitTest   = 0x0084
 
+	bSwpNoSize     = 0x0001
+	bSwpNoZOrder   = 0x0004
+	bSwpNoActivate = 0x0010
+
+	// Pointer travel (px) past which a press counts as a drag, not a click.
+	bDragSlop = 4
+
+	bHtClient     = 1
 	bHtCaption    = 2
 	bTransparent  = 1
 	bDtCenter     = 0x00000001
@@ -156,11 +169,14 @@ type bMenuItem struct {
 }
 
 var bMenuItems = []bMenuItem{
-	{"Screen Area", "Draw a region on screen", "bubble:screen_area", clAccent},
+	{"Select Screen Area", "Drag a region over the meeting", "bubble:screen_area", clAccent},
 	{"Select Window", "Pick an open app window", "bubble:win_picker", clAccent},
-	{"Launch Monitor", "Start face tracking", "bubble:launch", clEmerald},
-	{"Stop Monitor", "End session & save", "bubble:stop", clRed},
+	{"Live Monitor", "Start face tracking", "bubble:launch", clEmerald},
+	{"Stop Monitor", "End session and save", "bubble:stop", clRed},
 	{"", "", "", 0}, // divider
+	// Handled inside the bubble rather than by the frontend, so it works no
+	// matter which page the app is on.
+	{"Display on Top", "Pin Presentia above other windows", "bubble:pin", clAccent},
 	{"Quit Bubble", "Restore Presentia", "bubble:quit", clRed},
 }
 
@@ -184,6 +200,18 @@ var (
 	gBubbleMu    sync.Mutex
 	gThreadID    uint32 // Win32 thread ID of the bubble message loop
 	gClassOnce   sync.Once
+
+	// Drag state. The bubble has to be both draggable AND clickable, so a
+	// press is only a click if the pointer barely moved before release.
+	gDragging  bool
+	gDragMoved bool
+	gGrabX     int32 // cursor position when the press started
+	gGrabY     int32
+	gWinX      int32 // window position when the press started
+	gWinY      int32
+
+	// Whether the main window is currently pinned above other windows.
+	gPinned bool
 )
 
 // Package-level callbacks — must NOT be GC'd, so they are stored here rather
@@ -264,6 +292,32 @@ func fillRect(hdc uintptr, rc *bRECT, colour uint32) {
 func loWord(lp uintptr) int32 { return int32(int16(lp & 0xFFFF)) }
 func hiWord(lp uintptr) int32 { return int32(int16((lp >> 16) & 0xFFFF)) }
 
+func abs32(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// togglePin shows or hides Presentia as a compact panel pinned above every
+// other window, so an instructor can keep the roster visible next to Meet.
+func togglePin() {
+	app := gBubbleApp
+	if app == nil || app.ctx == nil {
+		return
+	}
+	gPinned = !gPinned
+	if gPinned {
+		wailsruntime.WindowUnminimise(app.ctx)
+		wailsruntime.WindowSetAlwaysOnTop(app.ctx, true)
+		wailsruntime.WindowSetSize(app.ctx, 460, 360)
+	} else {
+		wailsruntime.WindowSetAlwaysOnTop(app.ctx, false)
+		wailsruntime.WindowSetSize(app.ctx, 1100, 700)
+		wailsruntime.WindowMinimise(app.ctx)
+	}
+}
+
 // ── Bubble window procedure ───────────────────────────────────────────────────
 
 func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
@@ -276,6 +330,51 @@ func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		return 0
 
 	case bWmLButtonDown:
+		// Start a possible drag. Whether this turns out to be a click or a
+		// drag is decided on mouse-up, by how far the pointer travelled.
+		var pt bPOINT
+		bGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+		var rc bRECT
+		bGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+		gGrabX, gGrabY = pt.X, pt.Y
+		gWinX, gWinY = rc.Left, rc.Top
+		gDragging, gDragMoved = true, false
+		bSetCapture.Call(hwnd)
+		return 0
+
+	case bWmMouseMove:
+		if !gDragging {
+			return 0
+		}
+		var pt bPOINT
+		bGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+		dx, dy := pt.X-gGrabX, pt.Y-gGrabY
+		if !gDragMoved && (abs32(dx) > bDragSlop || abs32(dy) > bDragSlop) {
+			gDragMoved = true
+			// A menu anchored to the old position would be left stranded.
+			if gMenuOpen {
+				closeMenu()
+				gMenuOpen = false
+				bInvalidateRect.Call(hwnd, 0, 1)
+			}
+		}
+		if gDragMoved {
+			bSetWindowPos.Call(hwnd, 0,
+				uintptr(uint32(gWinX+dx)), uintptr(uint32(gWinY+dy)), 0, 0,
+				bSwpNoSize|bSwpNoZOrder|bSwpNoActivate)
+		}
+		return 0
+
+	case bWmLButtonUp:
+		if !gDragging {
+			return 0
+		}
+		gDragging = false
+		bReleaseCapture.Call()
+		if gDragMoved {
+			return 0 // that was a drag, not a click
+		}
+		// A real click: toggle the control menu.
 		if gMenuOpen {
 			closeMenu()
 			gMenuOpen = false
@@ -292,8 +391,11 @@ func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		return 0
 
 	case bWmNcHitTest:
-		// Make the whole window draggable like a title bar
-		return bHtCaption
+		// MUST be HTCLIENT. Returning HTCAPTION makes Windows treat the whole
+		// bubble as a title bar, which suppresses every client mouse message —
+		// WM_LBUTTONDOWN never arrives and the menu can never open. Dragging is
+		// handled above instead.
+		return bHtClient
 
 	case bWmClose:
 		// Posted by CloseFloatingBubble from the Wails thread. Destroying the
@@ -358,7 +460,11 @@ func menuWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			closeMenu()
 			gMenuOpen = false
 			bInvalidateRect.Call(gBubbleHwnd, 0, 1)
-			emitBubbleCmd(cmd)
+			if cmd == "bubble:pin" {
+				togglePin()
+			} else {
+				emitBubbleCmd(cmd)
+			}
 		}
 		return 0
 
@@ -437,15 +543,21 @@ func drawMenu(hdc, hwnd uintptr) {
 		iconRc := bRECT{Left: int32(bPad * 2), Top: yOff + (bItemH-22)/2, Right: int32(bPad*2 + 22), Bottom: yOff + (bItemH+22)/2}
 		fillRect(hdc, &iconRc, item.iconClr)
 
+		// The pin entry is a toggle, so its wording reflects current state.
+		label, sub := item.label, item.sub
+		if item.cmd == "bubble:pin" && gPinned {
+			label, sub = "Hide from Top", "Unpin and minimise Presentia"
+		}
+
 		bSelectObject.Call(hdc, gFontTitle)
 		bSetTextColor.Call(hdc, uintptr(clText))
 		tRc := bRECT{Left: int32(bPad*2 + 30), Top: yOff + 9, Right: int32(bMenuW - bPad*2), Bottom: yOff + 30}
-		drawText(hdc, item.label, &tRc, uintptr(bDtSingleLine))
+		drawText(hdc, label, &tRc, uintptr(bDtSingleLine))
 
 		bSelectObject.Call(hdc, gFontSub)
 		bSetTextColor.Call(hdc, uintptr(clMuted))
 		sRc := bRECT{Left: int32(bPad*2 + 30), Top: yOff + 31, Right: int32(bMenuW - bPad*2), Bottom: yOff + bItemH - 4}
-		drawText(hdc, item.sub, &sRc, uintptr(bDtSingleLine))
+		drawText(hdc, sub, &sRc, uintptr(bDtSingleLine))
 
 		yOff += bItemH
 	}

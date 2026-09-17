@@ -6,6 +6,8 @@ export function CheckForUpdate(arg1:boolean):Promise<main.UpdateInfo>;
 
 export function CloseBubble():Promise<void>;
 
+export function DownloadUpdate(arg1:string):Promise<string>;
+
 export function EnterPickerMode():Promise<void>;
 
 export function ExitPickerMode():Promise<void>;
@@ -13,6 +15,8 @@ export function ExitPickerMode():Promise<void>;
 export function GetAppVersion():Promise<string>;
 
 export function GetOpenWindows():Promise<Array<main.WindowInfo>>;
+
+export function InstallUpdate(arg1:string):Promise<void>;
 
 export function OpenBubble():Promise<void>;
 

@@ -1354,44 +1354,156 @@ select.input option {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   UPDATE NOTICE
+   SETTINGS PANEL & UPDATES
    ══════════════════════════════════════════════════════════════════ */
-.update-banner {
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  border-radius: var(--radius-md);
-  background: var(--tip-bg);
-  border: 1px solid var(--tip-border);
-  color: var(--tip-color);
-  flex-shrink: 0;
+  justify-content: center;
+  background: var(--overlay-bg);
+  padding: 24px;
 }
 
-.update-banner-text {
+.settings-panel {
+  width: 100%;
+  max-width: 520px;
+  max-height: 86vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  flex: 1;
-  min-width: 0;
+  gap: 18px;
+  padding: 20px 22px;
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
 }
 
-.update-banner-text strong {
-  font-size: 13px;
-  font-weight: 700;
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--card-row-bg);
+  border: 1px solid var(--card-row-border);
+}
+
+.settings-row-title {
+  font-size: 13.5px;
+  font-weight: 600;
   color: var(--ink-heading);
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.update-banner-sub {
-  font-size: 11.5px;
+.settings-row-sub {
+  font-size: 12px;
   color: var(--muted);
+  margin-top: 2px;
+}
+
+.update-pill {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-tint);
+  color: var(--accent-vivid);
+  border: 1px solid var(--glass-border);
+}
+
+.settings-notes {
+  margin: 0;
+  padding: 10px 14px 10px 30px;
+  border-radius: var(--radius-md);
+  background: var(--card-row-bg);
+  border: 1px solid var(--card-row-border);
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.settings-update-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.progress-track {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--pill-bg);
+  border: 1px solid var(--pill-border);
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.progress-label {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.update-banner-btn {
-  padding: 6px 14px;
-  font-size: 12px;
-  flex-shrink: 0;
+.settings-msg {
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card-row-bg);
+}
+
+.settings-msg-error {
+  color: var(--missing);
+  background: var(--missing-dim);
+}
+
+.settings-footer {
+  font-size: 11.5px;
+  color: var(--muted-lo);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+}
+
+/* Red dot on the sidebar gear when an update is waiting. */
+.sidebar-icon-btn { position: relative; }
+
+.nav-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--missing);
+  border: 2px solid var(--sidebar-bg);
+  pointer-events: none;
 }

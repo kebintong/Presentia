@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,7 +34,7 @@ import (
 // IMPORTANT: keep this in sync with MyAppVersion in build/installer.iss and
 // with the git tag you publish. If this is lower than the newest release tag,
 // users see the update banner â€” that comparison is the whole mechanism.
-const AppVersion = "1.0.0"
+const AppVersion = "1.2.0"
 
 // GitHubRepo is the "owner/name" of the repository whose Releases are checked.
 //
@@ -148,6 +150,148 @@ func (a *App) OpenDownloadPage(url string) {
 		return
 	}
 	wailsruntime.BrowserOpenURL(a.ctx, url)
+}
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// In-app download and install
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+// isTrustedUpdateURL guards every network and exec path below. The URL comes
+// from a JSON cache on disk, so it is not automatically trustworthy.
+func isTrustedUpdateURL(url string) bool {
+	return strings.HasPrefix(url, "https://github.com/") ||
+		strings.HasPrefix(url, "https://objects.githubusercontent.com/")
+}
+
+// DownloadUpdate fetches the installer into the user's temp folder and returns
+// its path. Progress is reported to the frontend as "update:progress" events
+// carrying an integer percentage (-1 when the size is unknown).
+func (a *App) DownloadUpdate(url string) (string, error) {
+	if !isTrustedUpdateURL(url) {
+		return "", fmt.Errorf("refusing to download from an untrusted URL")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Presentia-Updater/"+AppVersion)
+
+	// No overall timeout: this is a ~75 MB download on school wifi. The
+	// transport timeouts below cover a genuinely dead connection.
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSHandshakeTimeout:   30 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download failed: %s", resp.Status)
+	}
+
+	dir := filepath.Join(os.TempDir(), "Presentia-update")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	dest := filepath.Join(dir, "PresentiaSetup.exe")
+
+	// Remove a partial file from an interrupted attempt.
+	_ = os.Remove(dest)
+
+	out, err := os.Create(dest)
+	if err != nil {
+		return "", err
+	}
+
+	total := resp.ContentLength
+	var written int64
+	lastPct := -1
+	buf := make([]byte, 256*1024)
+
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := out.Write(buf[:n]); werr != nil {
+				out.Close()
+				os.Remove(dest)
+				return "", werr
+			}
+			written += int64(n)
+			pct := -1
+			if total > 0 {
+				pct = int(written * 100 / total)
+			}
+			if pct != lastPct && a.ctx != nil {
+				lastPct = pct
+				wailsruntime.EventsEmit(a.ctx, "update:progress", pct)
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			out.Close()
+			os.Remove(dest)
+			return "", readErr
+		}
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(dest)
+		return "", err
+	}
+
+	// A truncated installer is worse than none: it would fail halfway through
+	// replacing the app.
+	if total > 0 && written != total {
+		os.Remove(dest)
+		return "", fmt.Errorf("download incomplete: got %d of %d bytes", written, total)
+	}
+
+	if a.ctx != nil {
+		wailsruntime.EventsEmit(a.ctx, "update:progress", 100)
+	}
+	return dest, nil
+}
+
+// InstallUpdate launches the downloaded installer and closes Presentia.
+//
+// The app MUST exit for the installer to replace its own files, so this does
+// not return in any meaningful sense â€” the frontend should have already warned
+// the user. Inno Setup relaunches Presentia when it finishes.
+func (a *App) InstallUpdate(installerPath string) error {
+	if a.ctx == nil {
+		return fmt.Errorf("app not ready")
+	}
+	info, err := os.Stat(installerPath)
+	if err != nil {
+		return fmt.Errorf("installer not found: %w", err)
+	}
+	if info.Size() < 1024*1024 {
+		return fmt.Errorf("installer looks truncated (%d bytes)", info.Size())
+	}
+
+	// /SILENT            - progress window, no wizard pages to click through
+	// /CLOSEAPPLICATIONS - let Setup close anything holding files it must replace
+	// /NORESTART         - never reboot the machine
+	// The installer's [Run] entry starts Presentia again afterwards.
+	cmd := exec.Command(installerPath, "/SILENT", "/CLOSEAPPLICATIONS", "/NORESTART")
+	cmd.Dir = filepath.Dir(installerPath)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("could not start the installer: %w", err)
+	}
+	// Let Setup get going before we vanish, then quit so our files unlock.
+	// Quitting also closes the job object, which takes the sidecar down with
+	// us â€” that is what frees the install folder.
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		wailsruntime.Quit(a.ctx)
+	}()
+	return nil
 }
 
 // â”€â”€ internals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

@@ -6,6 +6,9 @@ interface SidebarProps {
   active: Page
   onNavigate: (page: Page) => void
   engineReady: boolean
+  onOpenSettings?: () => void
+  /** Shows a red dot on the settings gear when an update is waiting. */
+  updateAvailable?: boolean
 }
 
 interface NavItem {
@@ -65,7 +68,9 @@ const NAV_ITEMS: NavItem[] = [
   },
 ]
 
-export default function Sidebar({ active, onNavigate, engineReady }: SidebarProps) {
+export default function Sidebar({
+  active, onNavigate, engineReady, onOpenSettings, updateAvailable,
+}: SidebarProps) {
   return (
     <aside className="launcher-sidebar">
       {/* Navigation Icons Stack */}
@@ -92,9 +97,11 @@ export default function Sidebar({ active, onNavigate, engineReady }: SidebarProp
       <div className="sidebar-bottom-stack">
         <button
           className="sidebar-icon-btn bottom-btn"
-          title="Engine Status"
+          onClick={onOpenSettings}
+          title={updateAvailable ? 'Settings - update available' : 'Settings'}
           aria-label="Settings"
         >
+          {updateAvailable && <span className="nav-dot" aria-hidden="true" />}
           <div className="icon-wrapper">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />

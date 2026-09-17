@@ -18,7 +18,7 @@
 ; presentia-desktop\update.go and the git tag of the GitHub Release, or the
 ; in-app update banner will never clear. Use:
 ;     powershell -ExecutionPolicy Bypass -File build\set-version.ps1 1.1.0
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "Presentia Team"
 #define MyAppExeName "Presentia.exe"
 
@@ -33,6 +33,12 @@ DisableProgramGroupPage=yes
 ; Per-machine install needs admin; per-user avoids the UAC prompt entirely.
 ; Per-user is usually the better call for a school-deployed app.
 PrivilegesRequired=lowest
+; Let Setup shut down a running Presentia (and its sidecar) instead of failing
+; with "file in use". "force" terminates anything the Restart Manager cannot
+; close politely - without this, upgrading or uninstalling required the user to
+; hunt down presentia-sidecar.exe in Task Manager first.
+CloseApplications=force
+RestartApplications=no
 OutputDir=output
 OutputBaseFilename=PresentiaSetup
 Compression=lzma2
@@ -69,7 +75,7 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName} now"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName} now"; Flags: nowait postinstall
 
 [UninstallDelete]
 ; Clean up the sidecar's writable state if it ever leaves anything in {app}.
