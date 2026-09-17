@@ -87,7 +87,7 @@ export default function VideoCanvas({
         height: 'auto',
         borderRadius: 'var(--radius-lg)',
         border: '1px solid var(--glass-border)',
-        background: '#080b12',
+        background: 'var(--video-idle-bg)',
         display: 'block',
       }}
     />

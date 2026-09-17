@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { SaveCSVToFile } from '../../wailsjs/go/main/App'
 
 const API = 'http://127.0.0.1:7788'
 
@@ -10,7 +11,8 @@ interface Session {
 }
 
 interface AttendanceRow {
-  attendance_id: number
+  attendance_id: number | null
+  student_id: number
   student_no: string
   name: string
   time_in: string | null
@@ -35,6 +37,7 @@ export default function ReportsPage() {
   const [events, setEvents]           = useState<EventRow[]>([])
   const [loading, setLoading]         = useState(false)
   const [searchFilter, setSearchFilter] = useState('')
+  const [exportMsg, setExportMsg]     = useState('')
 
   const loadSessions = useCallback(async () => {
     try {
@@ -42,14 +45,14 @@ export default function ReportsPage() {
       if (res.ok) {
         const data: Session[] = await res.json()
         setSessions(data)
-        if (data.length > 0 && selectedId === null) {
-          setSelectedId(data[0].id)
-        }
+        // Functional update keeps this callback stable, so refreshing the
+        // session list no longer re-fires on every selection change.
+        setSelectedId((current) => (current === null && data.length > 0 ? data[0].id : current))
       }
     } catch {
       // Backend starting
     }
-  }, [selectedId])
+  }, [])
 
   const loadSession = useCallback(async (id: number) => {
     setLoading(true)
@@ -75,34 +78,67 @@ export default function ReportsPage() {
     if (selectedId !== null) loadSession(selectedId)
   }, [selectedId, loadSession])
 
-  const changeStatus = async (attendanceId: number, status: string) => {
+  // Status is keyed by student, not by attendance row: a student who was
+  // never detected has no attendance row at all, and those are exactly the
+  // ones an instructor needs to mark Absent or Late by hand.
+  const changeStatus = async (studentId: number, status: string) => {
+    if (!selectedId) return
+    const previous = rows
+    setRows((prev) =>
+      prev.map((r) => (r.student_id === studentId ? { ...r, status } : r))
+    )
     try {
-      await fetch(`${API}/api/attendance/${attendanceId}/status`, {
+      const res = await fetch(`${API}/api/sessions/${selectedId}/attendance/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ student_id: studentId, status }),
       })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
       setRows((prev) =>
-        prev.map((r) => (r.attendance_id === attendanceId ? { ...r, status } : r))
+        prev.map((r) =>
+          r.student_id === studentId
+            ? { ...r, status, attendance_id: data.attendance_id ?? r.attendance_id }
+            : r
+        )
       )
-    } catch {
-      // Update error
+    } catch (err: any) {
+      setRows(previous)
+      setExportMsg(`Could not update status: ${err.message}`)
     }
   }
 
   const exportCSV = async () => {
     if (!selectedId) return
+    setExportMsg('')
     try {
       const res = await fetch(`${API}/api/sessions/${selectedId}/export-csv`)
-      const blob = await res.blob()
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const text = await res.text()
+      const session = sessions.find((s) => s.id === selectedId)
+      const safeName = (session?.name || `session_${selectedId}`)
+        .replace(/[^a-z0-9_\- ]/gi, '')
+        .trim()
+        .replace(/\s+/g, '_')
+      const defaultName = `attendance_${safeName || selectedId}.csv`
+
+      // Native save dialog when running inside the desktop shell, browser
+      // download when the UI is opened in a plain browser for testing.
+      if ((window as any)['go']?.['main']?.['App']?.['SaveCSVToFile']) {
+        const path = await SaveCSVToFile(defaultName, text)
+        setExportMsg(path ? `Saved to ${path}` : 'Export cancelled.')
+        return
+      }
+      const blob = new Blob([text], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `attendance_session_${selectedId}.csv`
+      a.download = defaultName
       a.click()
       URL.revokeObjectURL(url)
-    } catch {
-      // Download error
+      setExportMsg(`Downloaded ${defaultName}`)
+    } catch (err: any) {
+      setExportMsg(`Export failed: ${err.message}`)
     }
   }
 
@@ -178,6 +214,10 @@ export default function ReportsPage() {
             </button>
           </div>
         </div>
+
+        {exportMsg && (
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>{exportMsg}</div>
+        )}
 
         {/* Tip / Notice Bar */}
         <div className="hero-tip-banner">
@@ -275,7 +315,7 @@ export default function ReportsPage() {
                 </thead>
                 <tbody>
                   {filteredRows.map((row) => (
-                    <tr key={row.attendance_id}>
+                    <tr key={row.student_id}>
                       <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{row.student_no}</td>
                       <td style={{ fontWeight: 600 }}>{row.name}</td>
                       <td style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'monospace' }}>
@@ -288,7 +328,7 @@ export default function ReportsPage() {
                         <select
                           className="input"
                           value={row.status}
-                          onChange={(e) => changeStatus(row.attendance_id, e.target.value)}
+                          onChange={(e) => changeStatus(row.student_id, e.target.value)}
                           style={{ padding: '4px 8px', fontSize: 12, width: 100 }}
                         >
                           {STATUSES.map((s) => (

@@ -1,44 +1,64 @@
 """Threaded webcam capture built on OpenCV, with a raw V4L2 fallback for
-virtual cameras (Iriun, OBS) that OpenCV cannot open while they are in use."""
+virtual cameras (Iriun, OBS) that OpenCV cannot open while they are in use.
+
+Note: Previously used PySide6.QtCore.QThread / Signal. Replaced with a
+pure-Python threading.Thread + callback design so the sidecar can import
+this module in a frozen exe that does not include PySide6.
+"""
 
 from __future__ import annotations
 
 import sys
+import threading
 import time
+from typing import Callable, Optional
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QThread, Signal
 
 MAX_FRAME_WIDTH = 1280  # phone cameras stream 1080p+; downscale for analysis
 
 
-class CameraThread(QThread):
-    """Continuously reads frames from a webcam and emits them (BGR, mirrored).
+class CameraThread:
+    """Continuously reads frames from a webcam and calls back with them.
 
-    If the device fails mid-run (unplugged / disabled), `camera_error` is emitted
-    and the thread keeps retrying to reopen so monitoring can detect recovery.
+    Callbacks (all optional, called from the camera thread):
+      on_frame(frame: np.ndarray)   – BGR frame, mirrored like a selfie view
+      on_error(message: str)        – device lost or failed to open
+      on_recovered()               – device recovered after a prior error
+
+    If the device fails mid-run (unplugged / disabled), `on_error` is called
+    and the thread keeps retrying to reopen so callers can detect recovery.
     """
 
-    frame_ready = Signal(np.ndarray)
-    camera_error = Signal(str)
-    camera_recovered = Signal()
-
-    def __init__(self, index: int = 0, fps: int = 20, parent=None):
-        super().__init__(parent)
+    def __init__(
+        self,
+        index: int = 0,
+        fps: int = 20,
+        on_frame: Optional[Callable[[np.ndarray], None]] = None,
+        on_error: Optional[Callable[[str], None]] = None,
+        on_recovered: Optional[Callable[[], None]] = None,
+    ) -> None:
         self._index = index
         self._interval = 1.0 / fps
         self._stop = False
+        self._on_frame = on_frame
+        self._on_error = on_error
+        self._on_recovered = on_recovered
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
 
     def stop(self) -> None:
         self._stop = True
-        self.wait(3000)
+        self._thread.join(timeout=3.0)
 
-    def run(self) -> None:
+    def _run(self) -> None:
         cap = self._open()
         failed = cap is None
-        if failed:
-            self.camera_error.emit("Could not open the camera.")
+        if failed and self._on_error:
+            self._on_error("Could not open the camera.")
 
         while not self._stop:
             if cap is None or not cap.isOpened():
@@ -46,7 +66,8 @@ class CameraThread(QThread):
                 time.sleep(0.5)
                 cap = self._open()
                 if cap is not None:
-                    self.camera_recovered.emit()
+                    if self._on_recovered:
+                        self._on_recovered()
                     failed = False
                 continue
 
@@ -54,7 +75,8 @@ class CameraThread(QThread):
             if not ok or frame is None:
                 if not failed:
                     failed = True
-                    self.camera_error.emit("Camera stopped delivering frames.")
+                    if self._on_error:
+                        self._on_error("Camera stopped delivering frames.")
                 cap.release()
                 cap = None
                 continue
@@ -66,7 +88,9 @@ class CameraThread(QThread):
                 )
             # mirror so the preview behaves like a selfie view; analysis uses
             # the same orientation so left/right prompts match the user
-            self.frame_ready.emit(cv2.flip(frame, 1))
+            frame = cv2.flip(frame, 1)
+            if self._on_frame:
+                self._on_frame(frame)
             time.sleep(self._interval)
 
         if cap is not None:

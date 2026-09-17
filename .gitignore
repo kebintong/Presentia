@@ -1,12 +1,43 @@
+# ── Python ───────────────────────────────────────────────────────────
 .venv/
 .venv-win/
 .local-libs/
 __pycache__/
 *.pyc
+
+# ── Local data ───────────────────────────────────────────────────────
+# Never commit a real class's attendance records or exports.
 attendance.db
-models/
 *.csv
-build/
-dist/
-*.log
+
+# ── Node ─────────────────────────────────────────────────────────────
 node_modules/
+
+# ── Logs ─────────────────────────────────────────────────────────────
+*.log
+
+# ── MediaPipe model ──────────────────────────────────────────────────
+# Already tracked from the initial upload, so clones still get it;
+# this only stops new large model files being added by accident.
+models/
+
+# ── PyInstaller output ───────────────────────────────────────────────
+# Leading slash matters: without it this would also match
+# presentia-desktop/frontend/dist, which has its own rule.
+/dist/
+
+# ── Build pipeline ───────────────────────────────────────────────────
+# Ignore the ARTIFACTS but keep the SCRIPTS. The old rule was a bare
+# "build/", which matches every build folder at any depth — it silently
+# excluded installer.iss, the PyInstaller spec, BUILD.md and
+# presentia-desktop/build/windows/ (the app icon and manifest), so a
+# fresh clone could not produce an installer at all.
+/build/*
+!/build/installer.iss
+!/build/presentia-sidecar.spec
+!/build/BUILD.md
+!/build/set-version.ps1
+
+# Wails compiles the desktop exe here.
+presentia-desktop/build/bin/
+presentia-desktop/presentia-desktop.exe

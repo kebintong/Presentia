@@ -2,13 +2,43 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 
-DB_PATH = Path(__file__).resolve().parents[2] / "attendance.db"
+
+def _resolve_db_path() -> Path:
+    """Pick a writable location for the SQLite file.
+
+    Dev mode: keep it in the project root, next to app/, like before.
+    Frozen/installed mode (PyInstaller, or PRESENTIA_DATA_DIR set by the Go
+    shell): use a per-user, always-writable app-data folder instead, since
+    Program Files / /Applications are read-only for normal users.
+    """
+    override = os.environ.get("PRESENTIA_DATA_DIR")
+    if override:
+        data_dir = Path(override)
+    elif getattr(sys, "frozen", False):
+        if sys.platform == "win32":
+            base = os.environ.get("APPDATA", str(Path.home()))
+        elif sys.platform == "darwin":
+            base = str(Path.home() / "Library" / "Application Support")
+        else:
+            base = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))
+        data_dir = Path(base) / "Presentia"
+    else:
+        # Dev mode: project root (two levels up from this file).
+        data_dir = Path(__file__).resolve().parents[2]
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir / "attendance.db"
+
+
+DB_PATH = _resolve_db_path()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS students (
@@ -121,8 +151,11 @@ def end_session(session_id: int) -> None:
             "UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
             (now, session_id),
         )
+        # Only close out rows the system actually observed; rows created by a
+        # manual status override carry an empty time_in and no timestamps.
         conn.execute(
-            "UPDATE attendance SET time_out = ? WHERE session_id = ? AND time_out IS NULL",
+            "UPDATE attendance SET time_out = ? "
+            "WHERE session_id = ? AND time_out IS NULL AND time_in <> ''",
             (now, session_id),
         )
 
@@ -154,29 +187,81 @@ def record_time_out(session_id: int, student_id: int) -> None:
         )
 
 
+def clear_time_out(session_id: int, student_id: int) -> None:
+    """Undo a provisional departure when the student comes back on screen."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE attendance SET time_out = NULL "
+            "WHERE session_id = ? AND student_id = ?",
+            (session_id, student_id),
+        )
+
+
 def set_status(attendance_id: int, status: str) -> None:
     with _connect() as conn:
         conn.execute("UPDATE attendance SET status = ? WHERE id = ?", (status, attendance_id))
 
 
+def set_student_status(session_id: int, student_id: int, status: str) -> int:
+    """Set a student's status for a session, creating the row if needed.
+
+    Students who were never recognized have no attendance row at all, so
+    marking them Present/Late by hand used to be impossible. An empty
+    `time_in` marks a row the system did not observe — the UI renders it
+    as a dash.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO attendance (session_id, student_id, time_in, status) "
+            "VALUES (?, ?, '', ?)",
+            (session_id, student_id, status),
+        )
+        conn.execute(
+            "UPDATE attendance SET status = ? WHERE session_id = ? AND student_id = ?",
+            (status, session_id, student_id),
+        )
+        row = conn.execute(
+            "SELECT id FROM attendance WHERE session_id = ? AND student_id = ?",
+            (session_id, student_id),
+        ).fetchone()
+    return int(row["id"]) if row else 0
+
+
 def session_report(session_id: int) -> list[dict]:
+    """Attendance for every registered student, seen or not.
+
+    Students the system never recognized come back with no timestamps and
+    status 'Absent' so instructors can review and override the full class
+    list rather than only the students who happened to be detected.
+    """
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT a.id AS attendance_id, s.student_no, s.name,
-                   a.time_in, a.time_out, a.status,
+            SELECT a.id AS attendance_id, s.id AS student_id, s.student_no, s.name,
+                   a.time_in, a.time_out,
+                   COALESCE(a.status, 'Absent') AS status,
                    (SELECT COUNT(*) FROM events e
-                     WHERE e.session_id = a.session_id AND e.student_id = a.student_id
+                     WHERE e.session_id = ? AND e.student_id = s.id
                        AND e.event_type IN ('out_of_frame', 'camera_off', 'identity_mismatch')
                    ) AS alert_count
-            FROM attendance a
-            JOIN students s ON s.id = a.student_id
-            WHERE a.session_id = ?
-            ORDER BY a.time_in
+            FROM students s
+            LEFT JOIN attendance a
+                   ON a.student_id = s.id AND a.session_id = ?
+            ORDER BY (a.time_in IS NULL OR a.time_in = ''), a.time_in, s.name
             """,
-            (session_id,),
+            (session_id, session_id),
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        row = dict(r)
+        # An empty string time_in means "row created by a manual override",
+        # not an observed sighting.
+        if not row["time_in"]:
+            row["time_in"] = None
+        if not row["time_out"]:
+            row["time_out"] = None
+        out.append(row)
+    return out
 
 
 # ------------------------------------------------------------------ events

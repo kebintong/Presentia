@@ -8,6 +8,8 @@ interface TopBarProps {
   engineReady: boolean
   theme: 'dark' | 'light'
   onToggleTheme: () => void
+  /** Build version, shown beside the title. Empty outside the desktop shell. */
+  version?: string
 }
 
 const PAGE_ORDER: Page[] = ['register', 'meet', 'session', 'reports']
@@ -18,6 +20,7 @@ export default function TopBar({
   engineReady,
   theme,
   onToggleTheme,
+  version,
 }: TopBarProps) {
   const currentIndex = PAGE_ORDER.indexOf(activePage)
 
@@ -95,6 +98,7 @@ export default function TopBar({
 
         {/* App Title */}
         <span className="top-app-title">Presentia</span>
+        {version && <span className="top-version-tag" title={`Version ${version}`}>v{version}</span>}
         <span className="top-page-tag">
           {activePage === 'register' && 'Student Registration'}
           {activePage === 'meet' && 'Meeting Monitor'}

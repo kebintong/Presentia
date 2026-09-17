@@ -1,0 +1,144 @@
+PRESENTIA — BUILD INSTRUCTIONS
+(full detail in build\BUILD.md)
+
+The installer has THREE parts, not two. The Python sidecar is frozen
+separately from the desktop shell, so editing Python and only running
+"wails build" ships the OLD Python code. That failure is invisible in
+dev mode, because dev runs Python straight from .venv.
+
+---------------------------------------------------------------------
+FULL BUILD — run all three from the PROJECT ROOT
+---------------------------------------------------------------------
+
+Step 1 — Freeze the Python sidecar (app\*.py):
+
+    .venv\Scripts\activate
+    pyinstaller build\presentia-sidecar.spec --noconfirm --clean
+
+    Produces dist\presentia-sidecar\presentia-sidecar.exe
+
+Step 2 — Build the Wails desktop exe (Go + React frontend):
+
+    cd presentia-desktop
+    wails build
+    cd ..
+
+    Produces presentia-desktop\build\bin\Presentia.exe
+
+Step 3 — Compile the installer:
+
+    in cmd.exe:
+    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build\installer.iss
+
+    in PowerShell (the & is required there, and only there):
+    & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build\installer.iss
+
+    Produces build\output\PresentiaSetup.exe
+
+NOTE: do not paste these commands with a trailing "# comment". cmd.exe has
+no # comment character and passes it straight through as arguments, which
+fails with "unrecognized arguments". Steps 1 and 2 are the same in cmd and
+PowerShell; only Step 3 differs.
+
+---------------------------------------------------------------------
+AFTER AN EDIT — which steps you actually need
+---------------------------------------------------------------------
+
+Changed app\*.py (sidecar, db, core)      -> Step 1, then 3
+Changed frontend\src\* or *.go            -> Step 2, then 3
+Changed both                              -> Steps 1, 2, 3
+Changed only installer.iss / version      -> Step 3
+
+When in doubt, run all three. Step 2 is fast; Step 1 takes a few minutes.
+
+Bump MyAppVersion in build\installer.iss on every release so Windows shows
+the right version in Add/Remove Programs.
+
+---------------------------------------------------------------------
+TEST BEFORE BUILDING
+---------------------------------------------------------------------
+
+    cd presentia-desktop
+    wails dev
+
+Dev mode runs Python from .venv and the frontend with hot reload, so both
+Python and React edits show up immediately. Use this for all testing; only
+build the installer once the change works here.
+
+To check the frozen sidecar itself after Step 1 (no venv active):
+
+    dist\presentia-sidecar\presentia-sidecar.exe --host 127.0.0.1 --port 7788
+
+Then open http://127.0.0.1:7788/api/engine/status — it should return
+{"ready":false,...} at once, turning into {"ready":true,"error":null}
+once the InsightFace model has loaded. A crash instead almost always
+means a missing hidden import: add it to hiddenimports in
+build\presentia-sidecar.spec and rebuild.
+
+Sidecar logs from the installed app:
+    %TEMP%\presentia-sidecar-stdout.log
+    %TEMP%\presentia-sidecar-stderr.log
+
+---------------------------------------------------------------------
+PUBLISHING AN UPDATE (in-app update notice)
+---------------------------------------------------------------------
+
+The installed app checks GitHub once a day and shows a banner when a newer
+release exists. It never installs anything by itself — the user clicks
+Download, runs the new PresentiaSetup.exe, and Inno Setup upgrades the
+existing install in place (same AppId, per-user, no admin prompt, and
+%APPDATA%\Presentia is untouched so no attendance data is lost).
+
+ONE-TIME SETUP
+    Open presentia-desktop\update.go and set:
+
+        const GitHubRepo = "your-github-username/Presentia"
+
+    Until that placeholder is replaced, update checking stays off and the
+    app behaves exactly as before.
+
+EVERY RELEASE
+    1. Set the version everywhere at once (never edit it by hand):
+
+        powershell -ExecutionPolicy Bypass -File build\set-version.ps1 1.1.0
+
+       This writes update.go, installer.iss and wails.json together. Run it
+       with -Check at any time to confirm they agree.
+
+    2. Build steps 1-3 above (skip step 1 if no Python changed).
+
+    3. Publish, with a tag that MATCHES the version:
+
+        git commit -am "Release 1.1.0"
+        git tag v1.1.0
+        git push --tags
+
+       Then create a GitHub Release for tag v1.1.0 and attach
+       build\output\PresentiaSetup.exe as an asset.
+
+WHY THE VERSIONS MUST MATCH
+    The banner compares AppVersion (compiled into the exe) against the
+    newest release tag. Tagging v1.1.0 while update.go still says 1.0.0
+    means everyone who installs 1.1.0 still reports 1.0.0 — so the banner
+    reappears forever. set-version.ps1 exists to make that impossible.
+
+NOTES
+    - Draft and pre-release GitHub Releases are ignored on purpose, so you
+      can stage a release before anyone is told about it.
+    - The check is throttled to once a day per machine. GitHub allows 60
+      unauthenticated API calls per hour per IP, and a whole computer lab
+      shares one IP.
+    - An unsigned installer shows a SmartScreen warning ("Windows protected
+      your PC" -> More info -> Run anyway). Removing it needs a paid
+      code-signing certificate; there is no free option.
+    - To test the banner without publishing: set AppVersion to "0.0.1" in
+      update.go, rebuild, and it will offer whatever your latest release is.
+
+---------------------------------------------------------------------
+USER DATA
+---------------------------------------------------------------------
+
+The installed app keeps attendance.db and the AI model cache in
+%APPDATA%\Presentia, NOT in Program Files, so reinstalling or upgrading
+keeps every enrolled student and attendance record. Uninstalling does not
+delete them either.

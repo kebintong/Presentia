@@ -58,6 +58,17 @@ class TileTracker:
                 match = FaceEngine.identify(t["emb"], known)
                 t["sid"], t["score"] = match if match else (None, 0.0)
 
+    def force_refresh(self, keep: int | None = None) -> None:
+        """Mark tracks as due for a fresh embedding on the next pass.
+
+        Used by on-demand re-verification: the instructor asks "is that
+        really them?" and the sticky identity is re-proven instead of being
+        carried forward from an earlier match.
+        """
+        for t in self._tracks:
+            if keep is None or t["sid"] == keep or t["sid"] is None:
+                t["embedded_at"] = None
+
     def process(self, frame: np.ndarray) -> tuple[
         list[tuple[int, float, tuple[int, int, int, int]]],
         list[tuple[np.ndarray | None, tuple[int, int, int, int]]],

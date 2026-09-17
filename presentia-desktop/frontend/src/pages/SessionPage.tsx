@@ -71,8 +71,20 @@ export default function SessionPage() {
 
   // Session lifecycle
   const startSession = async () => {
-    await loadStudents()
-    if (students.length === 0) {
+    // Read the refreshed list directly: the `students` state variable in this
+    // closure is still the pre-fetch value, so checking it rejected sessions
+    // even when students existed.
+    let roster: Student[] = students
+    try {
+      const res = await fetch(`${API}/api/students`)
+      if (res.ok) {
+        roster = await res.json()
+        setStudents(roster)
+      }
+    } catch {
+      // Fall back to whatever is already loaded.
+    }
+    if (roster.length === 0) {
       setBannerState('Register at least one student first.', 'error')
       return
     }
@@ -114,11 +126,9 @@ export default function SessionPage() {
   }
 
   const teardown = () => {
-    if (wsRef.current) {
-      wsRef.current.send(JSON.stringify({ action: 'stop' }))
-      wsRef.current.close()
-      wsRef.current = null
-    }
+    sendWs({ action: 'stop' })
+    wsRef.current?.close()
+    wsRef.current = null
     setPhase('idle')
     setSessionId(null)
     setFrame(null)
@@ -127,12 +137,38 @@ export default function SessionPage() {
     recCountRef.current = 0
   }
 
+  /** Send a control message, waiting for the socket to finish opening. */
+  const sendWs = (payload: Record<string, unknown>) => {
+    const ws = wsRef.current
+    if (!ws) return
+    const body = JSON.stringify(payload)
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(body)
+    } else if (ws.readyState === WebSocket.CONNECTING) {
+      ws.addEventListener('open', () => ws.send(body), { once: true })
+    }
+  }
+
   const openCameraWS = () => {
     const ws = new WebSocket(`${WS}/ws/camera`)
     wsRef.current = ws
     ws.onmessage = handleMessage
     ws.onerror = () => setBannerState('Camera error', 'error')
   }
+
+  // Never leave the webcam streaming after the user navigates away.
+  useEffect(() => {
+    return () => {
+      const ws = wsRef.current
+      if (ws) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: 'stop' }))
+        }
+        ws.close()
+        wsRef.current = null
+      }
+    }
+  }, [])
 
   const startVerification = async () => {
     const student = students[selectedIdx]
@@ -143,13 +179,7 @@ export default function SessionPage() {
     phaseStartRef.current = Date.now()
     setBannerState(`Verifying ${student.name}: follow the on-screen prompts.`, 'info')
 
-    wsRef.current?.send(
-      JSON.stringify({
-        action: 'start_liveness',
-        directional: true,
-        student_id: student.id,
-      })
-    )
+    sendWs({ action: 'start_liveness', directional: true, student_id: student.id })
   }
 
   const handleMessage = useCallback(
@@ -157,10 +187,15 @@ export default function SessionPage() {
       const data = JSON.parse(ev.data)
       if (data.jpeg) setFrame(data.jpeg)
 
+      if (data.type === 'error') {
+        setBannerState(data.message || 'Sidecar error', 'error')
+        return
+      }
+
       if (data.type === 'liveness') {
         if (Date.now() - phaseStartRef.current > LIVENESS_TIMEOUT) {
           setPhase('waiting')
-          wsRef.current?.send(JSON.stringify({ action: 'stop' }))
+          sendWs({ action: 'stop' })
           setBannerState('Liveness check timed out. Press Join & Verify to retry.', 'error')
           return
         }
@@ -168,12 +203,10 @@ export default function SessionPage() {
           setPhase('recognize')
           recCountRef.current = 0
           setBannerState('Liveness passed. Verifying facial identity...', 'info')
-          wsRef.current?.send(
-            JSON.stringify({
-              action: 'start_recognize',
-              student_id: pendingStudentRef.current?.id,
-            })
-          )
+          sendWs({
+            action: 'start_recognize',
+            student_id: pendingStudentRef.current?.id,
+          })
         } else {
           setBannerState(`Liveness check: ${data.prompt}`, 'info')
         }
@@ -205,18 +238,18 @@ export default function SessionPage() {
           addAlert(`${student.name} verified: time-in recorded.`, 'ok')
           setBannerState(`${student.name} is verified and being monitored.`, 'ok')
           setPhase('monitoring')
-          wsRef.current?.send(
-            JSON.stringify({
-              action: 'start_monitor',
-              student_id: student.id,
-            })
-          )
+          sendWs({
+            action: 'start_monitor',
+            student_id: student.id,
+            out_of_frame_after: 5.0,
+            camera_off_after: 3.0,
+          })
           return
         }
         if (recCountRef.current >= RECOGNIZE_ATTEMPTS) {
           const student = pendingStudentRef.current
           setPhase('waiting')
-          wsRef.current?.send(JSON.stringify({ action: 'stop' }))
+          sendWs({ action: 'stop' })
           addAlert(`Verification failed for ${student?.name}.`, 'error')
           setBannerState(`Face does not match ${student?.name}. Press Join & Verify to retry.`, 'error')
         }
@@ -377,7 +410,7 @@ export default function SessionPage() {
             </button>
 
             {/* Step info summary */}
-            <div style={{ padding: '12px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ padding: '12px 14px', borderRadius: '12px', background: 'var(--card-row-bg)', border: '1px solid var(--border-subtle)' }}>
               <span className="field-label" style={{ marginBottom: 6 }}>Check-in Workflow</span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

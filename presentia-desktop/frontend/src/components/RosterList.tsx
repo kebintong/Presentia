@@ -38,8 +38,8 @@ export default function RosterList({ students, onStudentClick, verifyingId }: Ro
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '9px 12px', borderRadius: 'var(--radius-sm)', width: '100%',
-            background: verifyingId === s.id ? 'var(--warn-dim)' : 'var(--glass-lo)',
-            border: `1px solid ${verifyingId === s.id ? 'rgba(251,191,36,0.3)' : 'var(--glass-border)'}`,
+            background: verifyingId === s.id ? 'var(--warn-dim)' : 'var(--card-row-bg)',
+            border: `1px solid ${verifyingId === s.id ? 'var(--warn)' : 'var(--glass-border)'}`,
             color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--body)',
             transition: 'all 0.15s ease',
           }}

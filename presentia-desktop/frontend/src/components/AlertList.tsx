@@ -31,7 +31,7 @@ export default function AlertList({ alerts, maxHeight = 200 }: AlertListProps) {
           style={{
             display: 'flex', alignItems: 'flex-start', gap: 8,
             padding: '7px 10px', borderRadius: 8,
-            background: 'var(--glass-lo)',
+            background: 'var(--card-row-bg)',
             border: '1px solid var(--glass-border)',
             fontSize: 12, fontWeight: 500,
             animation: 'rise 0.3s ease',

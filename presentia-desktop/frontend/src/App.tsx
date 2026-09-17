@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import TopBar from './components/TopBar'
 import Sidebar from './components/Sidebar'
+import UpdateBanner, { UpdateInfo } from './components/UpdateBanner'
 import RegisterPage from './pages/RegisterPage'
 import MeetPage from './pages/MeetPage'
 import SessionPage from './pages/SessionPage'
@@ -11,6 +12,9 @@ type Page = 'register' | 'meet' | 'session' | 'reports'
 type Theme = 'dark' | 'light'
 
 const API = 'http://127.0.0.1:7788'
+
+/** Wails bindings, absent when the UI is opened in a plain browser. */
+const goApp = () => (window as any)['go']?.['main']?.['App']
 
 export default function App() {
   const [page, setPage] = useState<Page>('register')
@@ -55,6 +59,37 @@ export default function App() {
     }
   }, [])
 
+  // Version + update check. Both are desktop-only and entirely optional: if
+  // the bindings are missing or GitHub is unreachable, the app just carries on
+  // without a banner.
+  const [version, setVersion] = useState('')
+  const [update, setUpdate] = useState<UpdateInfo | null>(null)
+
+  useEffect(() => {
+    const app = goApp()
+    if (!app) return
+
+    app['GetAppVersion']?.()
+      .then((v: string) => setVersion(v))
+      .catch(() => {})
+
+    // Delayed so the check never competes with sidecar startup.
+    const timer = setTimeout(() => {
+      app['CheckForUpdate']?.(false)
+        .then((info: UpdateInfo) => {
+          if (info?.available) setUpdate(info)
+        })
+        .catch(() => {
+          // Offline or rate-limited — not something to bother the user with.
+        })
+    }, 4000)
+    return () => clearTimeout(timer)
+  }, [])
+
+  const openDownload = (url: string) => {
+    goApp()?.['OpenDownloadPage']?.(url)
+  }
+
   const PAGE_COMPONENTS: Record<Page, React.ReactNode> = {
     register: <RegisterPage />,
     meet:     <MeetPage />,
@@ -64,15 +99,7 @@ export default function App() {
 
   return (
     <>
-      {/* Liquid glass gradient orbs background */}
-      <div className="bg-mesh" aria-hidden="true">
-        <div className="bg-orb-1" />
-        <div className="bg-orb-2" />
-        <div className="bg-orb-3" />
-        <div className="bg-orb-4" />
-      </div>
-
-      {/* Main App Shell */}
+      {/* Main App Shell — flat solid surfaces, no ambient background layer */}
       <div className="app-shell">
         {/* Top Header Bar with Theme Switcher */}
         <TopBar
@@ -81,6 +108,7 @@ export default function App() {
           engineReady={engineReady}
           theme={theme}
           onToggleTheme={toggleTheme}
+          version={version}
         />
 
         {/* App Body: Slim icon sidebar + Main viewport */}
@@ -91,6 +119,7 @@ export default function App() {
             engineReady={engineReady}
           />
           <main className="main-viewport">
+            <UpdateBanner info={update} onDownload={openDownload} />
             {PAGE_COMPONENTS[page]}
           </main>
         </div>

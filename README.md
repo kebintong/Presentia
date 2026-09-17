@@ -9,7 +9,7 @@
 
 **Presentia** is a modern desktop application (Windows / Linux) that verifies student identity through **facial recognition + active liveness detection**, continuously monitors presence during virtual class sessions (Google Meet, Zoom, Microsoft Teams), and manages attendance records locally.
 
-Migrated from legacy PySide6 to a modern **Wails v2 + React 19 + TypeScript** architecture, Presentia pairs a sleek, frameless desktop experience with an asynchronous **Python FastAPI sidecar** powering computer vision and biometric verification.
+Migrated from legacy PySide6 to a modern **Wails v2 + React 19 + TypeScript** architecture, Presentia pairs a frameless desktop experience with an asynchronous **Python FastAPI sidecar** powering computer vision and biometric verification.
 
 ---
 
@@ -17,7 +17,7 @@ Migrated from legacy PySide6 to a modern **Wails v2 + React 19 + TypeScript** ar
 
 - **Student Registration & Enrollment**
   - **Interactive 5-Pose Webcam Guide**: Guided capture capturing five key poses (Straight, Left, Right, Up, Blink) with real-time pose feedback.
-  - **Batch Photo Import**: Import 1–5 profile pictures using native OS file pickers (`OpenImageFilesDialog`).
+  - **Batch Photo Import**: Import 1–5 profile pictures; the face embedding is previewed first and the student record is written once, on Save.
   - **Live In-Call Enrollment**: Enroll unrecognized faces directly from active Google Meet sessions on the fly.
   - **Student Directory**: Search, review, and manage enrolled students and their 512-d facial embeddings.
 
@@ -38,11 +38,12 @@ Migrated from legacy PySide6 to a modern **Wails v2 + React 19 + TypeScript** ar
   - **Session History**: Detailed audit trail per session including start/end timestamps, duration, and participant counts.
   - **Attendance Record Table**: Logs student number, name, first sighting (`time_in`), departure (`time_out`), status, and alert frequency.
   - **Manual Status Overrides**: Update statuses (`Present`, `Late`, `Absent`) directly in the UI.
-  - **Native CSV Export**: Export formatted attendance logs via native OS save dialogs (`SaveCSVDialog`).
+  - **Full-Class Reports**: Every registered student appears, including those never detected (shown as `Absent`), so statuses can be reviewed and overridden for the whole class.
+  - **Native CSV Export**: Export formatted attendance logs via native OS save dialogs (`SaveCSVToFile`), with a browser download fallback when the UI is run outside the desktop shell.
 
 - **Modern Desktop Experience**
   - **Frameless UI**: Native custom titlebar (`TopBar`) with draggable region, window controls (minimize, maximize/restore, close), and engine status indicator.
-  - **Theme Switcher**: Fluid dark/light theme support with persistent preferences.
+  - **Theme Switcher**: Dark/light theme support with persistent preferences, flat solid surfaces in both.
   - **Automated Sidecar Management**: Go backend automatically launches, health-checks, and terminates the Python AI sidecar.
 
 ---
@@ -55,7 +56,7 @@ Migrated from legacy PySide6 to a modern **Wails v2 + React 19 + TypeScript** ar
 │                                                        │
 │  ┌──────────────────────────────────────────────────┐  │
 │  │      Frontend: React 19 + TypeScript + Vite      │  │
-│  │   Tailwind CSS v4 • Custom Glassmorphism UI      │  │
+│  │   Tailwind CSS v4 • Flat solid-surface UI        │  │
 │  │   Pages: Register, Meet Monitor, Session, Reports│  │
 │  └────────────────────────┬─────────────────────────┘  │
 │                           │ Wails Runtime Bindings     │
@@ -218,7 +219,7 @@ Presentia/
 │       ├── vite.config.ts            # Vite build configuration
 │       ├── src/
 │       │   ├── App.tsx               # Main layout, theme management, sidecar health poll
-│       │   ├── style.css             # Liquid glass aesthetic & Tailwind styles
+│       │   ├── style.css             # Flat theme tokens & Tailwind styles
 │       │   ├── components/
 │       │   │   ├── TopBar.tsx        # Frameless window controls, status, theme toggle
 │       │   │   ├── Sidebar.tsx       # Navigation sidebar with status badges
@@ -244,18 +245,26 @@ The Python sidecar serves REST and WebSocket endpoints on `http://127.0.0.1:7788
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/engine/status` | Model loading readiness check |
+| `GET` | `/api/screen/screenshot` | Primary-screen JPEG for the in-app region picker |
 | `GET` | `/api/students` | List all registered students |
-| `POST` | `/api/students` | Create new student profile with face embeddings |
+| `POST` | `/api/students` | Create new student profile from a face embedding |
 | `DELETE` | `/api/students/{id}` | Remove a student profile |
+| `GET` | `/api/students/{id}/embedding` | Base64 face embedding for one student |
+| `POST` | `/api/enroll/photos/preview` | Extract an embedding from photos **without** saving |
+| `POST` | `/api/enroll/photos` | Extract an embedding from photos and save the student |
 | `GET` | `/api/sessions` | Fetch past attendance sessions |
-| `POST` | `/api/sessions/start` | Start a new monitoring session |
-| `POST` | `/api/sessions/stop` | End active session and commit departures |
-| `GET` | `/api/sessions/{id}/report` | Fetch full session attendance summary |
-| `PATCH` | `/api/attendance/{id}` | Update manual attendance status (`Present`/`Late`/`Absent`) |
-| `GET` | `/api/sessions/{id}/export` | Export session attendance as CSV |
-| `WS` | `/ws/enroll` | Live 5-pose guided webcam enrollment stream |
-| `WS` | `/ws/meet` | Google Meet screen capture and multi-face recognition stream |
-| `WS` | `/ws/session` | Single-student webcam liveness verification and presence stream |
+| `POST` | `/api/sessions` | Create a new session |
+| `PUT` | `/api/sessions/{id}/end` | End a session and stamp time-outs |
+| `GET` | `/api/sessions/{id}/report` | Attendance for **every** registered student |
+| `GET` | `/api/sessions/{id}/events` | Full presence/audit event log for a session |
+| `POST` | `/api/attendance/time-in` | Record a verified arrival |
+| `POST` | `/api/attendance/time-out` | Record a departure |
+| `PATCH` | `/api/attendance/{id}/status` | Update status on an existing attendance row |
+| `PATCH` | `/api/sessions/{id}/attendance/status` | Set a student's status, creating the row if they were never seen |
+| `POST` | `/api/sessions/{id}/log-event` | Append a presence/audit event |
+| `GET` | `/api/sessions/{id}/export-csv` | Export session attendance as CSV |
+| `WS` | `/ws/camera` | Webcam stream: guided enrollment, liveness, recognition, presence monitoring |
+| `WS` | `/ws/screen` | Screen-region capture: multi-face recognition, live enrollment, on-demand re-verification |
 
 ---
 

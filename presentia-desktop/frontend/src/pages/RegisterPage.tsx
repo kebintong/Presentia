@@ -33,7 +33,12 @@ export default function RegisterPage() {
   const [canSave, setCanSave]           = useState(false)
   const [embeddingB64, setEmbeddingB64] = useState<string | null>(null)
   const [loading, setLoading]           = useState(false)
+  // Track which steps just completed so we can re-trigger the pop animation
+  const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set())
+  // Field validation errors — shown as red border + shake
+  const [fieldErrors, setFieldErrors]   = useState<{ studentNo?: boolean; name?: boolean }>({})
   const wsRef = useRef<WebSocket | null>(null)
+  const prevCountRef = useRef<number>(-1)
 
   const loadStudents = useCallback(async () => {
     try {
@@ -50,11 +55,27 @@ export default function RegisterPage() {
     loadStudents()
   }, [loadStudents])
 
+  const validateFields = (): boolean => {
+    const errors: { studentNo?: boolean; name?: boolean } = {}
+    if (!studentNo.trim()) errors.studentNo = true
+    if (!name.trim()) errors.name = true
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors)
+      setStatusMsg('Please fill in Student ID Number and Full Name first.')
+      // Auto-clear the red highlight after 2.5 s
+      setTimeout(() => setFieldErrors({}), 2500)
+      return false
+    }
+    setFieldErrors({})
+    return true
+  }
+
   const startWebcam = () => {
     if (mode === 'webcam') {
       stopCapture()
       return
     }
+    if (!validateFields()) return
     stopCapture()
     setFrame(null)
     setProgress(null)
@@ -76,16 +97,32 @@ export default function RegisterPage() {
       if (data.jpeg) setFrame(data.jpeg)
       if (data.type === 'enroll') {
         setProgress(data)
+        // Detect a newly completed step and trigger the pop animation
+        const newCount: number = data.count
+        if (newCount > prevCountRef.current) {
+          // Each completed step index is 0-based; count = how many done so far
+          const justDoneIdx = newCount - 1
+          if (justDoneIdx >= 0) {
+            setCompletedSteps(prev => new Set(prev).add(justDoneIdx))
+          }
+          prevCountRef.current = newCount
+        }
         if (data.done) {
+          // Mark all steps done and capture the embedding sent by the sidecar
+          setCompletedSteps(new Set([0, 1, 2, 3, 4]))
+          if (data.embedding_b64) {
+            console.log('[Presentia] Enrollment done — embedding received, length:', data.embedding_b64.length)
+            setEmbeddingB64(data.embedding_b64)
+          } else {
+            console.warn('[Presentia] Enrollment done — but NO embedding_b64 in payload! Sidecar may be outdated.')
+            setStatusMsg('Error: embedding not received. Please rebuild the sidecar.')
+          }
           setStatusMsg(`All ${data.total} samples captured. Fill in details and press Save.`)
-          setCanSave(true)
+          setCanSave(!!data.embedding_b64)
           stopCapture()
         } else {
-          setStatusMsg(`Pose ${data.count + 1}/${data.total}: ${data.prompt}`)
+          setStatusMsg(data.prompt || `Pose ${data.count + 1}/${data.total}`)
         }
-      }
-      if (data.type === 'enroll_done') {
-        setEmbeddingB64(data.embedding_b64)
       }
     }
 
@@ -96,14 +133,37 @@ export default function RegisterPage() {
   }
 
   const stopCapture = () => {
-    wsRef.current?.send(JSON.stringify({ action: 'stop' }))
-    wsRef.current?.close()
+    const ws = wsRef.current
+    if (ws) {
+      // Sending on a socket that is still CONNECTING throws and would leave
+      // the camera running on the sidecar side.
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'stop' }))
+      }
+      ws.close()
+    }
     wsRef.current = null
     setMode('idle')
     setFrame(null)
+    prevCountRef.current = -1
   }
 
+  // Leaving the page must release the webcam.
+  useEffect(() => {
+    return () => {
+      const ws = wsRef.current
+      if (ws) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: 'stop' }))
+        }
+        ws.close()
+        wsRef.current = null
+      }
+    }
+  }, [])
+
   const importPhotos = async () => {
+    if (!validateFields()) return
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = 'image/*'
@@ -114,20 +174,29 @@ export default function RegisterPage() {
       setLoading(true)
       setStatusMsg('Extracting face data from photos...')
       try {
+        // Preview only — the student record is written once, by Save.
+        // The old flow created the student here and then POSTed to an
+        // endpoint that did not exist, so saving always failed.
         const fd = new FormData()
-        fd.append('student_no', studentNo.trim() || 'TEMP')
-        fd.append('name', name.trim() || 'TEMP')
         files.forEach((f) => fd.append('files', f))
-        const res = await fetch(`${API}/api/enroll/photos`, { method: 'POST', body: fd })
+        const res = await fetch(`${API}/api/enroll/photos/preview`, {
+          method: 'POST',
+          body: fd,
+        })
         if (!res.ok) {
-          const e = await res.json()
+          const e = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
           setStatusMsg(`Error: ${e.detail}`)
           setLoading(false)
           return
         }
         const data = await res.json()
-        setStatusMsg(`Face extracted from ${data.samples} photo(s). Fill in details and press Save.`)
-        setEmbeddingB64('__from_photos__')
+        if (!data.embedding_b64) {
+          setStatusMsg('Error: no face data returned from the photos.')
+          setLoading(false)
+          return
+        }
+        setStatusMsg(`Face extracted from ${data.samples} photo(s). Check the details and press Save.`)
+        setEmbeddingB64(data.embedding_b64)
         setCanSave(true)
         const reader = new FileReader()
         reader.onload = (e) => setFrame((e.target?.result as string).split(',')[1])
@@ -152,27 +221,24 @@ export default function RegisterPage() {
     }
     setLoading(true)
     try {
-      let res: Response
-      if (embeddingB64 === '__from_photos__') {
-        res = await fetch(`${API}/api/students/finalize-temp`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ student_no: studentNo.trim(), name: name.trim() }),
-        })
-      } else {
-        res = await fetch(`${API}/api/students`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            student_no: studentNo.trim(),
-            name: name.trim(),
-            embedding_b64: embeddingB64,
-          }),
-        })
-      }
+      // One save path for both webcam capture and photo import.
+      const res = await fetch(`${API}/api/students`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          student_no: studentNo.trim(),
+          name: name.trim(),
+          embedding_b64: embeddingB64,
+        }),
+      })
       if (!res.ok) {
-        const err = await res.json()
-        setStatusMsg(`Error: ${err.detail || 'Failed to save'}`)
+        const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
+        const detail = String(err.detail || 'Failed to save')
+        setStatusMsg(
+          detail.includes('UNIQUE')
+            ? `Error: student number ${studentNo.trim()} is already registered.`
+            : `Error: ${detail}`
+        )
         return
       }
       setStatusMsg(`Saved ${name.trim()} successfully!`)
@@ -182,6 +248,8 @@ export default function RegisterPage() {
       setCanSave(false)
       setProgress(null)
       setFrame(null)
+      setCompletedSteps(new Set())
+      prevCountRef.current = -1
       loadStudents()
     } catch (err: any) {
       setStatusMsg(`Error: ${err.message}`)
@@ -203,6 +271,8 @@ export default function RegisterPage() {
     }
   }
 
+  // stepIdx = the index of the step currently being captured (0-based)
+  // progress.count = how many samples have been collected so far
   const stepIdx = progress ? progress.count : -1
 
   const filteredStudents = students.filter(
@@ -291,22 +361,26 @@ export default function RegisterPage() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div>
-              <label className="field-label">Student ID Number</label>
+              <label className="field-label" style={{ color: fieldErrors.studentNo ? 'var(--missing)' : undefined }}>
+                Student ID Number {fieldErrors.studentNo && <span style={{ fontSize: 10, fontWeight: 700 }}>← Required</span>}
+              </label>
               <input
-                className="input"
+                className={`input ${fieldErrors.studentNo ? 'input-error' : ''}`}
                 placeholder="e.g. 2024-00123"
                 value={studentNo}
-                onChange={(e) => setStudentNo(e.target.value)}
+                onChange={(e) => { setStudentNo(e.target.value); if (fieldErrors.studentNo) setFieldErrors(p => ({ ...p, studentNo: false })) }}
               />
             </div>
 
             <div>
-              <label className="field-label">Full Name</label>
+              <label className="field-label" style={{ color: fieldErrors.name ? 'var(--missing)' : undefined }}>
+                Full Name {fieldErrors.name && <span style={{ fontSize: 10, fontWeight: 700 }}>← Required</span>}
+              </label>
               <input
-                className="input"
+                className={`input ${fieldErrors.name ? 'input-error' : ''}`}
                 placeholder="e.g. Juan Dela Cruz"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => { setName(e.target.value); if (fieldErrors.name) setFieldErrors(p => ({ ...p, name: false })) }}
               />
             </div>
 
@@ -342,34 +416,59 @@ export default function RegisterPage() {
             </div>
 
             {/* Pose Progress Rings */}
-            <div style={{ padding: '12px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ padding: '12px 14px', borderRadius: '12px', background: 'var(--card-row-bg)', border: '1px solid var(--border-subtle)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
                 <span className="field-label" style={{ margin: 0 }}>Enrollment Steps</span>
                 <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>
-                  {progress ? `${Math.min(progress.count + 1, 5)} / 5` : '0 / 5'}
+                  {progress ? `${Math.min(progress.count, 5)} / 5` : '0 / 5'}
                 </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+                {POSE_LABELS.map((lbl, i) => {
+                  const isDone = completedSteps.has(i) || i < stepIdx
+                  const isActive = !isDone && i === stepIdx
+                  return (
+                    <div
+                      // key changes when step becomes done → forces DOM remount → re-triggers animation
+                      key={`${i}-${isDone ? 'done' : isActive ? 'active' : 'idle'}`}
+                      className={`step-ring ${isDone ? 'done' : isActive ? 'active' : ''}`}
+                      title={lbl}
+                      style={{ cursor: 'default' }}
+                    >
+                      {isDone ? (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5">
+                          <path d="M20 6L9 17l-5-5" />
+                        </svg>
+                      ) : (
+                        i + 1
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+              {/* Pose label below active step */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, marginTop: 6 }}>
                 {POSE_LABELS.map((lbl, i) => (
-                  <div
-                    key={i}
-                    className={`step-ring ${i < stepIdx ? 'done' : i === stepIdx ? 'active' : ''}`}
-                    title={lbl}
-                  >
-                    {i < stepIdx ? (
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                        <path d="M20 6L9 17l-5-5" />
-                      </svg>
-                    ) : (
-                      i + 1
-                    )}
-                  </div>
+                  <div key={i} style={{
+                    flex: 1,
+                    textAlign: 'center',
+                    fontSize: 9,
+                    fontWeight: 600,
+                    letterSpacing: '0.03em',
+                    textTransform: 'uppercase',
+                    color: completedSteps.has(i) || i < stepIdx
+                      ? 'var(--present)'
+                      : i === stepIdx
+                        ? 'var(--accent-vivid)'
+                        : 'var(--muted-lo)',
+                    transition: 'color 0.3s ease',
+                  }}>{lbl}</div>
                 ))}
               </div>
             </div>
 
             {/* Status Feedback */}
-            <div style={{ padding: '10px 12px', borderRadius: '10px', background: 'rgba(255,255,255,0.04)', fontSize: 12, color: 'var(--muted)' }}>
+            <div style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--card-row-bg)', fontSize: 12, color: 'var(--muted)' }}>
               {statusMsg}
             </div>
           </div>
