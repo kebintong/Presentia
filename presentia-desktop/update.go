@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"encoding/json"
@@ -13,7 +13,7 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Update checking
 //
 // Presentia does not update itself. It asks GitHub what the newest release is
@@ -25,20 +25,20 @@ import (
 //
 // Nothing here can break the app: every failure path is silent and simply
 // reports "no update available".
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // AppVersion is the version of this build.
 //
 // IMPORTANT: keep this in sync with MyAppVersion in build/installer.iss and
 // with the git tag you publish. If this is lower than the newest release tag,
-// users see the update banner — that comparison is the whole mechanism.
+// users see the update banner â€” that comparison is the whole mechanism.
 const AppVersion = "1.0.0"
 
 // GitHubRepo is the "owner/name" of the repository whose Releases are checked.
 //
 // The repository must be public for unauthenticated clients to read its
 // releases. If it is ever made private, update checking simply stops finding
-// releases — it does not break the app.
+// releases â€” it does not break the app.
 const GitHubRepo = "kebintong/Presentia"
 
 // How long to wait before asking GitHub again.
@@ -49,7 +49,7 @@ const GitHubRepo = "kebintong/Presentia"
 // lab of any size far below the limit.
 //
 // If you ever do hit the limit, point manifestURL at a plain JSON file
-// instead (raw.githubusercontent.com has no API rate limit) — the only thing
+// instead (raw.githubusercontent.com has no API rate limit) â€” the only thing
 // that has to change is parseRelease.
 const updateCheckInterval = 24 * time.Hour
 
@@ -109,7 +109,7 @@ func (a *App) CheckForUpdate(force bool) (UpdateInfo, error) {
 
 	rel, err := fetchLatestRelease()
 	if err != nil {
-		// Offline, rate-limited, or GitHub is down — report no update and let
+		// Offline, rate-limited, or GitHub is down â€” report no update and let
 		// the next check try again.
 		if a.ctx != nil {
 			wailsruntime.LogInfo(a.ctx, "Update check skipped: "+err.Error())
@@ -150,7 +150,7 @@ func (a *App) OpenDownloadPage(url string) {
 	wailsruntime.BrowserOpenURL(a.ctx, url)
 }
 
-// ── internals ────────────────────────────────────────────────────────────────
+// â”€â”€ internals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func fetchLatestRelease() (*ghRelease, error) {
 	manifestURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", GitHubRepo)
