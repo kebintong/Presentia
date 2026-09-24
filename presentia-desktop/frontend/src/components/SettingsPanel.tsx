@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+import PresentiaLogo from './PresentiaLogo'
+import PerformanceSettings from './PerformanceSettings'
 
 export interface UpdateInfo {
   available: boolean
@@ -11,6 +13,22 @@ export interface UpdateInfo {
 }
 
 type Phase = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
+type Tab = 'appearance' | 'performance' | 'updates'
+
+const TAB_KEY = 'presentia.settingsTab'
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'appearance', label: 'Appearance' },
+  { id: 'performance', label: 'Performance' },
+  { id: 'updates', label: 'Software Updates' },
+]
+
+function loadTab(): Tab {
+  try {
+    const t = localStorage.getItem(TAB_KEY)
+    if (t === 'appearance' || t === 'performance' || t === 'updates') return t
+  } catch { /* storage unavailable */ }
+  return 'appearance'
+}
 
 interface SettingsPanelProps {
   open: boolean
@@ -19,18 +37,27 @@ interface SettingsPanelProps {
   version: string
   theme: 'dark' | 'light'
   onToggleTheme: () => void
+  iridescent: boolean
+  onToggleIridescent: () => void
   onRecheck: () => Promise<UpdateInfo | null>
 }
 
 const goApp = () => (window as any)['go']?.['main']?.['App']
 
 export default function SettingsPanel({
-  open, onClose, update, version, theme, onToggleTheme, onRecheck,
+  open, onClose, update, version, theme, onToggleTheme,
+  iridescent, onToggleIridescent, onRecheck,
 }: SettingsPanelProps) {
   const [phase, setPhase]         = useState<Phase>('idle')
   const [progress, setProgress]   = useState(0)
   const [message, setMessage]     = useState('')
   const [installer, setInstaller] = useState('')
+  const [tab, setTab]             = useState<Tab>(loadTab)
+
+  const chooseTab = (t: Tab) => {
+    setTab(t)
+    try { localStorage.setItem(TAB_KEY, t) } catch { /* ignore */ }
+  }
 
   // Download progress is pushed from Go rather than polled.
   useEffect(() => {
@@ -103,21 +130,80 @@ export default function SettingsPanel({
           <button className="btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={onClose}>✕</button>
         </div>
 
+        {/* Each group of settings on its own tab */}
+        <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              className={`settings-tab ${tab === t.id ? 'active' : ''}`}
+              onClick={() => chooseTab(t.id)}
+            >
+              {t.label}
+              {t.id === 'updates' && update?.available && <span className="settings-tab-dot" aria-label="Update available" />}
+            </button>
+          ))}
+        </div>
+
         {/* ── Appearance ─────────────────────────────────────────── */}
+        {tab === 'appearance' && (<>
         <div className="settings-section">
           <span className="field-label">Appearance</span>
           <div className="settings-row">
             <div>
               <div className="settings-row-title">Theme</div>
-              <div className="settings-row-sub">Currently {theme === 'dark' ? 'dark' : 'light'}</div>
+              <div className="settings-row-sub">
+                {iridescent
+                  ? 'Locked to dark while Iridescent Design is on'
+                  : `Currently ${theme === 'dark' ? 'dark' : 'light'}`}
+              </div>
             </div>
-            <button className="btn-ghost" onClick={onToggleTheme}>
+            <button className="btn-ghost" onClick={onToggleTheme} disabled={iridescent}>
               Switch to {theme === 'dark' ? 'Light' : 'Dark'}
             </button>
           </div>
         </div>
 
-        {/* ── Updates ────────────────────────────────────────────── */}
+        {/* ── Experimental (appearance) ────────────────────────── */}
+        <div className="settings-section">
+          <span className="field-label">Experimental</span>
+          <div className="settings-row">
+            <div className="settings-row-lead">
+              <div className="settings-logo-preview">
+                <PresentiaLogo height={28} />
+              </div>
+              <div>
+                <div className="settings-row-title">
+                  Iridescent Design
+                  <span className="update-pill experimental-pill">Beta</span>
+                </div>
+                <div className="settings-row-sub">
+                  Spectrum accents across the app and on the monitor bubble. Dark mode only.
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={iridescent}
+              aria-label="Iridescent Design"
+              className={`toggle-switch ${iridescent ? 'on' : ''}`}
+              onClick={onToggleIridescent}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </div>
+        </div>
+
+        </>)}
+
+        {/* ── Performance ─────────────────────────────────────── */}
+        {tab === 'performance' && <PerformanceSettings />}
+
+        {/* ── Software updates ─────────────────────────────────── */}
+        {tab === 'updates' && (
         <div className="settings-section">
           <span className="field-label">Updates</span>
 
@@ -187,6 +273,7 @@ export default function SettingsPanel({
             </div>
           )}
         </div>
+        )}
 
         <div className="settings-footer">
           Attendance records are stored on this computer and are never uploaded.

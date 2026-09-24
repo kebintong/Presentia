@@ -28,6 +28,7 @@ export namespace main {
 	    top: number;
 	    width: number;
 	    height: number;
+	    hwnd: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new WindowInfo(source);
@@ -40,6 +41,7 @@ export namespace main {
 	        this.top = source["top"];
 	        this.width = source["width"];
 	        this.height = source["height"];
+	        this.hwnd = source["hwnd"];
 	    }
 	}
 

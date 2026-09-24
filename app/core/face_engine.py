@@ -1,7 +1,10 @@
-"""Face detection, embedding and matching built on InsightFace (buffalo_l, CPU)."""
+"""Face detection, embedding and matching built on InsightFace (buffalo_l).
+
+Runs on the CPU or on a GPU chosen in Settings (see app.core.perf)."""
 
 from __future__ import annotations
 
+import contextlib
 import threading
 
 import numpy as np
@@ -10,36 +13,122 @@ import numpy as np
 MATCH_THRESHOLD = 0.45
 
 
+@contextlib.contextmanager
+def _default_session_options(so):
+    """InsightFace builds its onnxruntime sessions without SessionOptions,
+    so there is no way to pass thread limits through it. Supply ours as the
+    default for sessions created inside this block."""
+    import onnxruntime as ort
+
+    original = ort.InferenceSession.__init__
+
+    def patched(self, path_or_bytes, sess_options=None, providers=None,
+                provider_options=None, **kwargs):
+        return original(self, path_or_bytes, sess_options or so, providers,
+                        provider_options, **kwargs)
+
+    ort.InferenceSession.__init__ = patched
+    try:
+        yield
+    finally:
+        ort.InferenceSession.__init__ = original
+
+
 class FaceEngine:
     """Lazily-initialized singleton around InsightFace's FaceAnalysis pipeline.
 
     First call downloads the buffalo_l model pack (~300 MB) if not cached, so
     call `FaceEngine.instance()` from a background thread.
+
+    Which device runs the models, and how many CPU threads they may use,
+    comes from app.core.perf (Settings → Performance). `reconfigure()`
+    rebuilds the engine with new settings and swaps it in once it works.
     """
 
     _instance: "FaceEngine | None" = None
     _lock = threading.Lock()
+    _build_lock = threading.Lock()
+    _status: dict = {"state": "loading"}
 
-    def __init__(self) -> None:
+    def __init__(self, settings: dict | None = None) -> None:
         from insightface.app import FaceAnalysis
 
-        self._app = FaceAnalysis(
-            name="buffalo_l",
-            allowed_modules=["detection", "recognition"],
-            providers=["CPUExecutionProvider"],
-        )
-        self._app.prepare(ctx_id=0, det_size=(640, 640))
+        from app.core import perf
+
+        s = settings or perf.get_settings()
+        high = bool(s.get("high_performance"))
+        last_exc: Exception | None = None
+        # Best plan first (the chosen GPU), CPU last. A GPU that fails to
+        # initialise or to run falls back to the CPU so the app always works.
+        for plan in perf.engine_plans(s):
+            try:
+                so = perf.session_options(plan["backend"], high)
+                with _default_session_options(so):
+                    app = FaceAnalysis(
+                        name="buffalo_l",
+                        allowed_modules=["detection", "recognition"],
+                        providers=plan["providers"],
+                        provider_options=plan["provider_options"],
+                    )
+                    app.prepare(ctx_id=0, det_size=(640, 640))
+                # Warm-up: prove the device can actually run both models.
+                app.det_model.detect(np.zeros((480, 640, 3), dtype=np.uint8), max_num=0)
+                app.models["recognition"].get_feat(np.zeros((112, 112, 3), dtype=np.uint8))
+                used = app.det_model.session.get_providers()[0]
+                self._app = app
+                self.backend = {"DmlExecutionProvider": "DirectML",
+                                "CUDAExecutionProvider": "CUDA"}.get(used, "CPU")
+                self.device = plan["device"] if self.backend != "CPU" else "CPU"
+                self.threads = so.intra_op_num_threads
+                self.fell_back = last_exc is not None or plan["backend"] != self.backend
+                self.error = str(last_exc) if last_exc else None
+                break
+            except Exception as exc:  # noqa: BLE001 - try the next plan
+                last_exc = exc
+        else:
+            raise last_exc  # type: ignore[misc]
 
     @classmethod
     def instance(cls) -> "FaceEngine":
         with cls._lock:
             if cls._instance is None:
                 cls._instance = cls()
+                cls._status = {"state": "ready"}
         return cls._instance
 
     @classmethod
     def is_ready(cls) -> bool:
         return cls._instance is not None
+
+    @classmethod
+    def status(cls) -> dict:
+        """What is running the models now, for the Settings panel."""
+        inst = cls._instance
+        out = dict(cls._status)
+        if inst is not None:
+            for key in ("backend", "device", "threads", "fell_back", "error"):
+                out[key] = getattr(inst, key, None)
+        return out
+
+    @classmethod
+    def reconfigure(cls) -> None:
+        """Rebuild with the saved settings in the background. The current
+        engine keeps serving until the new one has loaded and passed its
+        warm-up; a running monitoring session keeps its engine until it ends."""
+
+        def _build() -> None:
+            with cls._build_lock:
+                cls._status = {"state": "applying"}
+                try:
+                    new = cls()
+                except Exception as exc:  # noqa: BLE001
+                    cls._status = {"state": "error", "message": str(exc)}
+                    return
+                with cls._lock:
+                    cls._instance = new
+                cls._status = {"state": "ready"}
+
+        threading.Thread(target=_build, daemon=True).start()
 
     # ------------------------------------------------------------------
 

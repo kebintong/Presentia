@@ -1,41 +1,37 @@
 import React from 'react'
+import PresentiaLogo from './PresentiaLogo'
+import markLight from '../assets/images/presentia-mark-light.png'
+import markDark from '../assets/images/presentia-mark-dark.png'
 
 type Page = 'register' | 'meet' | 'session' | 'reports'
 
 interface TopBarProps {
   activePage: Page
-  onNavigate: (page: Page) => void
+  /** Kept for callers; the top bar no longer has back/forward arrows. */
+  onNavigate?: (page: Page) => void
   engineReady: boolean
   theme: 'dark' | 'light'
   onToggleTheme: () => void
   /** Build version, shown beside the title. Empty outside the desktop shell. */
   version?: string
+  /** Experimental iridescent design: spectrum mark, theme locked to dark. */
+  iridescent?: boolean
 }
 
-const PAGE_ORDER: Page[] = ['register', 'meet', 'session', 'reports']
+/** Brand mark size in the top bar. MARK_WIDEN stretches it horizontally
+ *  (1 = the artwork's natural 1325:2000 proportions). */
+const MARK_H = 24
+const MARK_WIDEN = 1.2
+const MARK_W = Math.round(((MARK_H * 1325) / 2000) * MARK_WIDEN)
 
 export default function TopBar({
   activePage,
-  onNavigate,
   engineReady,
   theme,
   onToggleTheme,
   version,
+  iridescent = false,
 }: TopBarProps) {
-  const currentIndex = PAGE_ORDER.indexOf(activePage)
-
-  const handleBack = () => {
-    if (currentIndex > 0) {
-      onNavigate(PAGE_ORDER[currentIndex - 1])
-    }
-  }
-
-  const handleForward = () => {
-    if (currentIndex < PAGE_ORDER.length - 1) {
-      onNavigate(PAGE_ORDER[currentIndex + 1])
-    }
-  }
-
   // Window control actions (Wails Go binding + Runtime fallback)
   const handleMinimise = () => {
     if ((window as any)['go']?.['main']?.['App']?.['WindowMinimise']) {
@@ -63,37 +59,22 @@ export default function TopBar({
 
   return (
     <header className="top-bar" onDoubleClick={handleToggleMaximise}>
-      {/* Left side: "P" Brand Logo + Nav arrows + Title */}
+      {/* Left side: "P" Brand Logo + Title */}
       <div className="top-bar-left">
-        {/* Bold "P" Logo matching the browser tab */}
+        {/* Presentia mark — cyan in light mode, white in dark, spectrum when iridescent */}
         <div className="top-brand-emblem" title="Presentia">
-          <span className="brand-p-logo">P</span>
-        </div>
-
-        {/* Navigation arrows */}
-        <div className="top-nav-arrows">
-          <button
-            className="top-arrow-btn"
-            onClick={handleBack}
-            disabled={currentIndex === 0}
-            title="Previous section"
-            aria-label="Previous"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 18l-6-6 6-6" />
-            </svg>
-          </button>
-          <button
-            className="top-arrow-btn"
-            onClick={handleForward}
-            disabled={currentIndex === PAGE_ORDER.length - 1}
-            title="Next section"
-            aria-label="Next"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 18l6-6-6-6" />
-            </svg>
-          </button>
+          {iridescent ? (
+            <PresentiaLogo height={MARK_H} width={MARK_W} className="brand-iri-logo" />
+          ) : (
+            <img
+              src={theme === 'dark' ? markDark : markLight}
+              alt=""
+              className="brand-mark"
+              height={MARK_H}
+              width={MARK_W}
+              style={{ width: MARK_W, height: MARK_H }}
+            />
+          )}
         </div>
 
         {/* App Title */}
@@ -119,7 +100,12 @@ export default function TopBar({
         <button
           className="theme-toggle-btn"
           onClick={onToggleTheme}
-          title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          disabled={iridescent}
+          title={
+            iridescent
+              ? 'Iridescent Design is dark-only — turn it off in Settings to use Light mode'
+              : theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'
+          }
           aria-label="Toggle Theme"
         >
           {theme === 'dark' ? (

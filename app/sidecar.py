@@ -11,7 +11,7 @@ import asyncio
 import base64
 import csv
 import io
-import itertools
+import sys
 import threading
 import time
 
@@ -22,10 +22,11 @@ from fastapi import (
     Body,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from app.data import db
+from app.core import perf
 from app.core.face_engine import FaceEngine
 
 # ── DB init ──────────────────────────────────────────────────────────────────
@@ -56,7 +57,47 @@ def _preload_engine() -> None:
         _engine_ready.set()
 
 
+perf.apply_process_priority()
 threading.Thread(target=_preload_engine, daemon=True).start()
+
+
+# ── Lifetime: never outlive the desktop app ───────────────────────────────────
+#
+# The Go shell also ties us to it with a Windows Job Object and kills us on
+# exit; this is the belt-and-braces half. If the app that started us goes
+# away for any reason (crash, End Task, a failed job assignment, Linux), we
+# notice within a second or two and exit, releasing the webcam and port.
+
+def _watch_parent(pid: int) -> None:
+    import os
+
+    if sys.platform == "win32":
+        import ctypes
+
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if handle:
+            k32.WaitForSingleObject(handle, 0xFFFFFFFF)  # until it exits
+            os._exit(0)
+    while True:  # fallback polling (POSIX, or no handle)
+        time.sleep(1.5)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            os._exit(0)
+        if sys.platform != "win32" and os.getppid() != pid:
+            os._exit(0)
+
+
+def _start_parent_watch() -> None:
+    import os
+
+    raw = os.environ.get("PRESENTIA_PARENT_PID", "")
+    if raw.isdigit() and int(raw) > 0:
+        threading.Thread(target=_watch_parent, args=(int(raw),), daemon=True).start()
+
+
+_start_parent_watch()
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
@@ -92,6 +133,54 @@ async def engine_status() -> dict:
     """Used by the Go shell to poll readiness; also consumed by the frontend."""
     ready = _engine_ready.is_set() and _engine_error is None
     return {"ready": ready, "error": _engine_error}
+
+
+@app.post("/api/shutdown", status_code=204)
+async def shutdown_sidecar() -> None:
+    """Exit now. The desktop app calls this at startup to clear out a
+    sidecar left behind by an earlier run, then starts its own."""
+    import os
+
+    asyncio.get_event_loop().call_later(0.2, os._exit, 0)
+
+
+# ── Performance: processing device + high performance mode ───────────────────
+
+class PerfUpdate(BaseModel):
+    device: str | None = None
+    high_performance: bool | None = None
+
+
+def _perf_payload() -> dict:
+    import os
+
+    return {
+        "settings": perf.get_settings(),
+        "devices": perf.list_gpus(),
+        "gpu_runtime": perf.gpu_runtime(),
+        "status": FaceEngine.status(),
+        "cpu_cores": os.cpu_count() or 0,
+        "threads": {"balanced": perf.cpu_threads(False), "high": perf.cpu_threads(True)},
+    }
+
+
+@app.get("/api/perf")
+async def get_perf() -> dict:
+    """Processing device options found on this machine and what is in use."""
+    return await asyncio.to_thread(_perf_payload)
+
+
+@app.put("/api/perf")
+async def put_perf(body: PerfUpdate) -> dict:
+    """Save the settings and rebuild the face engine with them."""
+    valid = {"auto", "cpu"} | {g["id"] for g in perf.list_gpus()}
+    if body.device is not None and body.device not in valid:
+        raise HTTPException(status_code=400, detail=f"Unknown device {body.device!r}")
+    before = perf.get_settings()
+    after = perf.save_settings(body.device, body.high_performance)
+    if after != before:
+        FaceEngine.reconfigure()
+    return await asyncio.to_thread(_perf_payload)
 
 
 # ── Screen screenshot (for in-app region picker) ──────────────────────────────
@@ -318,12 +407,360 @@ async def export_csv(session_id: int) -> StreamingResponse:
     )
 
 
+# ── Live monitoring snapshot (for the native bubble, tray and pop-out) ──────
+#
+# While a Meet monitoring run is active, the native windows in the Go shell
+# (the stats chip under the bubble, the tray tooltip and the Live View
+# pop-out) poll these endpoints directly. They keep working when the main
+# window is hidden in the tray, without routing video through the webview.
+
+class _LiveMonitor:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._reset()
+
+    def _reset(self) -> None:
+        self.active = False
+        self.name = ""
+        self.started = 0.0
+        self.jpeg: bytes = b""
+        self.seq = 0
+        self.counts = {"present": 0, "missing": 0, "waiting": 0, "total": 0, "unknown": 0}
+        self.last_alert = ""
+        self.last_level = ""
+
+    def start(self, name: str) -> None:
+        with self._lock:
+            self._reset()
+            self.active = True
+            self.name = name
+            self.started = time.time()
+
+    def stop(self) -> None:
+        with self._lock:
+            self.active = False
+            self.jpeg = b""
+
+    def frame(self, jpeg: bytes) -> None:
+        with self._lock:
+            if self.active:
+                self.jpeg = jpeg
+                self.seq += 1
+
+    def stats(self, roster: list[dict], unknown: int) -> None:
+        c = {"present": 0, "missing": 0, "waiting": 0}
+        for r in roster:
+            c[r["state"]] = c.get(r["state"], 0) + 1
+        c["total"] = len(roster)
+        c["unknown"] = unknown
+        with self._lock:
+            self.counts = c
+
+    def alert(self, message: str, level: str) -> None:
+        with self._lock:
+            self.last_alert, self.last_level = message, level
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "active": self.active,
+                "name": self.name,
+                "elapsed": (time.time() - self.started) if self.active else 0.0,
+                **self.counts,
+                "last_alert": self.last_alert,
+                "last_level": self.last_level,
+                "frame_seq": self.seq,
+            }
+
+    def latest_frame(self, after: int) -> tuple[bytes, int] | None:
+        with self._lock:
+            if not self.active or not self.jpeg or self.seq <= after:
+                return None
+            return self.jpeg, self.seq
+
+
+_live = _LiveMonitor()
+
+
+@app.get("/api/monitor/live")
+async def monitor_live() -> dict:
+    """Counts, elapsed time and the last alert of the active monitoring run."""
+    return _live.snapshot()
+
+
+@app.get("/api/monitor/frame")
+async def monitor_frame(after: int = 0) -> Response:
+    """Newest annotated preview frame as JPEG; 204 if nothing newer than `after`."""
+    got = _live.latest_frame(after)
+    if got is None:
+        return Response(status_code=204)
+    jpeg, seq = got
+    return Response(content=jpeg, media_type="image/jpeg",
+                    headers={"X-Frame-Seq": str(seq), "Cache-Control": "no-store"})
+
+
+# ── Following a selected window ───────────────────────────────────────────────
+
+class _WindowFollower:
+    """Captures one top-level window, wherever it is (Windows only).
+
+    The window's own contents are rendered with PrintWindow
+    (PW_RENDERFULLCONTENT), so it keeps being monitored while it is covered
+    by other windows — e.g. after Alt+Tab to Chrome — or dragged partly off
+    screen. Only a minimised or closed window pauses monitoring.
+
+    A few apps draw in a way PrintWindow cannot see and come back black. If
+    that keeps happening while the window is actually showing something, we
+    fall back to grabbing its area of the screen (which needs it visible) and
+    tell the instructor.
+    """
+
+    BLACK_FRAMES_BEFORE_FALLBACK = 8
+
+    def __init__(self, hwnd: int, title: str) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        self._ct = ctypes
+        self._wt = wintypes
+        self.hwnd = wintypes.HWND(hwnd)
+        self.title = title or "The selected window"
+        u32, g32 = ctypes.windll.user32, ctypes.windll.gdi32
+        self._u32, self._g32 = u32, g32
+        u32.IsWindow.argtypes = [wintypes.HWND]
+        u32.IsIconic.argtypes = [wintypes.HWND]
+        u32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        u32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+        u32.GetDC.argtypes = [wintypes.HWND]
+        u32.GetDC.restype = wintypes.HDC
+        u32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+        g32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+        g32.CreateCompatibleDC.restype = wintypes.HDC
+        g32.CreateDIBSection.argtypes = [wintypes.HDC, ctypes.c_void_p, wintypes.UINT,
+                                         ctypes.POINTER(ctypes.c_void_p), wintypes.HANDLE, wintypes.DWORD]
+        g32.CreateDIBSection.restype = wintypes.HBITMAP
+        g32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+        g32.SelectObject.restype = wintypes.HGDIOBJ
+        g32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+        g32.DeleteDC.argtypes = [wintypes.HDC]
+        try:
+            self._dwm = ctypes.windll.dwmapi.DwmGetWindowAttribute
+            self._dwm.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+        except Exception:  # noqa: BLE001
+            self._dwm = None
+        self._dc = None
+        self._bmp = None
+        self._bits = None
+        self._size = (0, 0)
+        self._black = 0
+        self.screen_only = False  # PrintWindow can't see this app
+
+    @classmethod
+    def create(cls, hwnd, title: str) -> "_WindowFollower | None":
+        if sys.platform != "win32" or not hwnd:
+            return None
+        try:
+            return cls(int(hwnd), title)
+        except Exception:  # noqa: BLE001
+            return None
+
+    # -- geometry --------------------------------------------------------
+
+    def _rects(self):
+        """(window rect, visible frame rect). The window rect includes the
+        invisible resize border; DWM's extended frame bounds do not."""
+        wr, fr = self._wt.RECT(), self._wt.RECT()
+        if not self._u32.GetWindowRect(self.hwnd, self._ct.byref(wr)):
+            return None, None
+        if self._dwm is None or self._dwm(self.hwnd, 9, self._ct.byref(fr), self._ct.sizeof(fr)) != 0:
+            fr = wr
+        return wr, fr
+
+    def state(self) -> str:
+        if not self._u32.IsWindow(self.hwnd):
+            return "closed"
+        if self._u32.IsIconic(self.hwnd):
+            return "minimized"
+        return "ok"
+
+    # -- capture ---------------------------------------------------------
+
+    def _ensure_buffer(self, w: int, h: int) -> bool:
+        if self._bmp is not None and self._size == (w, h):
+            return True
+        self.close()
+        ct = self._ct
+
+        class BITMAPINFOHEADER(ct.Structure):
+            _fields_ = [("biSize", ct.c_uint32), ("biWidth", ct.c_int32), ("biHeight", ct.c_int32),
+                        ("biPlanes", ct.c_uint16), ("biBitCount", ct.c_uint16),
+                        ("biCompression", ct.c_uint32), ("biSizeImage", ct.c_uint32),
+                        ("biXPelsPerMeter", ct.c_int32), ("biYPelsPerMeter", ct.c_int32),
+                        ("biClrUsed", ct.c_uint32), ("biClrImportant", ct.c_uint32)]
+
+        bih = BITMAPINFOHEADER(ct.sizeof(BITMAPINFOHEADER), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+        screen = self._u32.GetDC(None)
+        self._dc = self._g32.CreateCompatibleDC(screen)
+        self._u32.ReleaseDC(None, screen)
+        bits = ct.c_void_p()
+        self._bmp = self._g32.CreateDIBSection(self._dc, ct.byref(bih), 0, ct.byref(bits), None, 0)
+        if not self._bmp or not bits.value:
+            self.close()
+            return False
+        self._g32.SelectObject(self._dc, self._bmp)
+        self._bits = (ct.c_ubyte * (w * h * 4)).from_address(bits.value)
+        self._size = (w, h)
+        return True
+
+    def _print_window(self, wr, fr) -> np.ndarray | None:
+        w, h = wr.right - wr.left, wr.bottom - wr.top
+        if w < 40 or h < 40 or not self._ensure_buffer(w, h):
+            return None
+        if not self._u32.PrintWindow(self.hwnd, self._dc, 2):  # PW_RENDERFULLCONTENT
+            return None
+        self._g32.GdiFlush()
+        full = np.frombuffer(self._bits, dtype=np.uint8).reshape(h, w, 4)
+        # Crop to the visible frame (drop the invisible resize border).
+        x0, y0 = max(0, fr.left - wr.left), max(0, fr.top - wr.top)
+        x1, y1 = min(w, fr.right - wr.left), min(h, fr.bottom - wr.top)
+        return np.ascontiguousarray(full[y0:y1, x0:x1, :3])
+
+    def _screen_grab(self, sct, desktop: dict, fr) -> np.ndarray | None:
+        left = max(fr.left, desktop["left"])
+        top = max(fr.top, desktop["top"])
+        right = min(fr.right, desktop["left"] + desktop["width"])
+        bottom = min(fr.bottom, desktop["top"] + desktop["height"])
+        if right - left < 40 or bottom - top < 40:
+            return None
+        shot = sct.grab({"left": left, "top": top, "width": right - left, "height": bottom - top})
+        return np.ascontiguousarray(np.asarray(shot, dtype=np.uint8)[:, :, :3])
+
+    def capture(self, sct, desktop: dict) -> tuple[str, np.ndarray | None]:
+        """(state, BGR frame or None). States: ok, minimized, closed,
+        offscreen (screen-only mode), screen_only (switched to screen mode)."""
+        st = self.state()
+        if st != "ok":
+            return st, None
+        wr, fr = self._rects()
+        if wr is None:
+            return "closed", None
+        if not self.screen_only:
+            frame = self._print_window(wr, fr)
+            if frame is not None and frame.size and frame[::8, ::8].max() > 12:
+                self._black = 0
+                return "ok", frame
+            self._black += 1
+            if self._black < self.BLACK_FRAMES_BEFORE_FALLBACK:
+                return "ok", None  # a transient blank frame; try again
+            self.screen_only = True
+            self.close()
+            frame = self._screen_grab(sct, desktop, fr)
+            return "screen_only", frame
+        frame = self._screen_grab(sct, desktop, fr)
+        return ("screen_only" if frame is not None else "offscreen"), frame
+
+    def describe(self, state: str, previous: str) -> tuple[str, str] | None:
+        if state == "ok" or (state == "screen_only" and previous == "offscreen"):
+            if previous in ("minimized", "offscreen", "closed"):
+                return (f"{self.title} is back — monitoring resumed.", "ok")
+            return None
+        return {
+            "minimized": (f"{self.title} is minimised — monitoring paused until it is restored.", "warn"),
+            "offscreen": (f"{self.title} is off-screen — monitoring paused.", "warn"),
+            "closed": (f"{self.title} was closed — monitoring paused. Select another window.", "error"),
+            "screen_only": (f"{self.title} can't be read while it is covered, so keep it visible "
+                            f"on screen for monitoring to work.", "warn"),
+        }.get(state)
+
+    def close(self) -> None:
+        if self._bmp:
+            self._g32.DeleteObject(self._bmp)
+        if self._dc:
+            self._g32.DeleteDC(self._dc)
+        self._dc = self._bmp = self._bits = None
+        self._size = (0, 0)
+
+
 # ── WebSocket helpers ─────────────────────────────────────────────────────────
 
-def _frame_to_jpeg_b64(frame: np.ndarray) -> str:
+def _frame_to_jpeg_b64(frame: np.ndarray, quality: int = 72) -> str:
     """Encode a BGR frame to JPEG and return as base64 string."""
-    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
     return base64.b64encode(buf).decode()
+
+
+def _frame_to_jpeg(frame: np.ndarray, quality: int = 72) -> bytes:
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    return buf.tobytes() if ok else b""
+
+
+def _orient(frame: np.ndarray, mirror: bool, invert: bool) -> np.ndarray:
+    """Apply the viewer's camera orientation.
+
+    mirror = selfie view (horizontal flip); invert = rotate 180 degrees, for
+    cameras mounted or reporting upside down. Both together = vertical flip.
+    """
+    if mirror and invert:
+        return cv2.flip(frame, 0)
+    if mirror:
+        return cv2.flip(frame, 1)
+    if invert:
+        return cv2.flip(frame, -1)
+    return frame
+
+
+class _LatestFrame:
+    """Single-slot mailbox: the producer overwrites, the consumer always gets
+    the newest item. Slow consumers drop stale frames instead of lagging."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._item = None
+
+    def put(self, item) -> None:
+        with self._cond:
+            self._item = item
+            self._cond.notify()
+
+    def take(self, timeout: float = 0.5):
+        with self._cond:
+            if self._item is None:
+                self._cond.wait(timeout)
+            item, self._item = self._item, None
+            return item
+
+
+class _FramePump:
+    """Delivers preview JPEGs to the socket at whatever rate it can take,
+    always the newest one, without ever queueing a backlog.
+
+    Frames go out as binary WebSocket messages (raw JPEG bytes). Base64
+    inside JSON made every frame a third bigger and forced the page to parse
+    and decode it on its UI thread; binary frames are decoded off-thread by
+    the browser (createImageBitmap). JSON messages remain for everything else.
+    """
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+        self._event = asyncio.Event()
+        self._jpeg: bytes | None = None
+
+    def publish(self, jpeg: bytes) -> None:  # any thread
+        self._jpeg = jpeg
+        self._loop.call_soon_threadsafe(self._event.set)
+
+    async def run(self, ws: WebSocket, send_lock: asyncio.Lock) -> None:
+        while True:
+            await self._event.wait()
+            self._event.clear()
+            jpeg, self._jpeg = self._jpeg, None
+            if jpeg is None:
+                continue
+            async with send_lock:
+                try:
+                    await ws.send_bytes(jpeg)
+                except Exception:  # noqa: BLE001 - socket gone
+                    return
 
 
 async def _send_json(ws: WebSocket, data: dict) -> bool:
@@ -363,7 +800,13 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
       {"action": "start_liveness", "directional": true}
       {"action": "start_recognize", "student_id": 1}      # or "embedding_b64"
       {"action": "start_monitor",   "student_id": 1}      # or "embedding_b64"
+      {"action": "set_view", "mirror": true, "invert": false}  # any time
       {"action": "stop"}
+
+    Preview frames and analysis run on separate threads: the camera is read
+    and streamed at its native rate (~30 fps) while analysis — which can take
+    hundreds of ms when an embedding is computed — works on the newest frame
+    whenever it is free. A slow analysis step never stalls the preview.
 
     Server sends JSON frames:
       {"type": "frame",  "jpeg": "<base64>"}
@@ -382,7 +825,11 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
     from app.core.enrollment import GuidedEnrollment
     from app.core.monitor import PresenceMonitor
 
-    result_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    # Analysis results are small and some must never be dropped (the final
+    # enrollment message carries the embedding), so the queue is generous.
+    result_queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+    send_lock = asyncio.Lock()
+    view = {"mirror": True, "invert": False}
 
     # How often the monitored student's identity is re-checked, and how long
     # to wait before repeating a mismatch warning.
@@ -400,6 +847,31 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
     last_reid = 0.0
     last_mismatch = 0.0
     analysis_lock = threading.Lock()
+    # Held by the analysis thread while it works on a frame, so a tracker is
+    # never closed underneath it (see _retire).
+    work_lock = threading.Lock()
+
+    def _retire(old) -> None:
+        """Close a replaced FaceMesh tracker once analysis is done with it,
+        without blocking the event loop."""
+        if old is None:
+            return
+
+        def _close() -> None:
+            with work_lock:
+                old.close()
+
+        threading.Thread(target=_close, daemon=True).start()
+
+    def _set_view(msg: dict) -> None:
+        if "mirror" in msg:
+            view["mirror"] = bool(msg["mirror"])
+        if "invert" in msg:
+            view["invert"] = bool(msg["invert"])
+        # Left/right prompts are defined for the mirrored (selfie) view.
+        for obj in (guided, liveness):
+            if obj is not None:
+                obj.mirrored = view["mirror"]
 
     def _embed_largest(frame: np.ndarray) -> np.ndarray | None:
         face = FaceEngine.instance().largest_face(frame)
@@ -430,7 +902,6 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
                 return None
             result = g.process(frame)
             result["type"] = "enroll"
-            result["jpeg"] = _frame_to_jpeg_b64(frame)
             # When all poses are done, compute the mean embedding and send it
             # back so the frontend can call /api/students directly.
             if result.get("done") and g.samples:
@@ -444,7 +915,6 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
                 return None
             result = lv.process(frame)
             result["type"] = "liveness"
-            result["jpeg"] = _frame_to_jpeg_b64(frame)
             return result
         if m == "recognize":
             # Embedding a face costs ~1s on CPU. Throttling it keeps the
@@ -452,15 +922,13 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
             # the attempt counter from burning through in a couple of seconds.
             now = time.monotonic()
             if now - last_reid < RECOGNIZE_EVERY:
-                return {"type": "frame", "jpeg": _frame_to_jpeg_b64(frame)}
+                return None
             last_reid = now
             emb = FaceEngine.instance().embed_largest(frame)
             if emb is None:
-                return {"type": "recognize", "found": False, "score": 0.0,
-                        "jpeg": _frame_to_jpeg_b64(frame)}
+                return {"type": "recognize", "found": False, "score": 0.0}
             score = FaceEngine.similarity(emb, target_emb)
-            return {"type": "recognize", "found": True, "score": float(score),
-                    "jpeg": _frame_to_jpeg_b64(frame)}
+            return {"type": "recognize", "found": True, "score": float(score)}
         if m == "monitor":
             t = tracker
             if t is None:
@@ -500,49 +968,66 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
                 "face_found": face_found,
                 "brightness": brightness,
                 "reid": reid,
-                "jpeg": _frame_to_jpeg_b64(frame),
             }
         return None
 
-    # Run camera in a thread
+    # Camera → preview on one thread, analysis on another.
     stop_event = threading.Event()
     loop = asyncio.get_event_loop()
+    frames = _FramePump(loop)
+    to_analyse = _LatestFrame()
 
     def _camera_thread() -> None:
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
+        from app.core.camera import open_fast_capture
+
+        cap, first = open_fast_capture(0)
+        if cap is None:
             _push({"type": "error", "message": "Could not open camera"})
             return
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        min_gap = 1.0 / 30.0  # some virtual cameras return frames instantly
+        last = 0.0
+        frame = first
         try:
             while not stop_event.is_set():
-                ok, frame = cap.read()
-                if not ok:
-                    # Losing the device mid-session is exactly the "student
-                    # turned their camera off" case the instructor needs to
-                    # hear about.
-                    if presence is not None:
-                        presence.camera_failed()
-                    _push({"type": "error",
-                           "message": "Camera stopped delivering frames."})
-                    break
-                frame = cv2.flip(frame, 1)
-                try:
-                    result = _analyse(frame)
-                except Exception as exc:  # noqa: BLE001 – keep the stream alive
-                    _push({"type": "error", "message": f"Analysis error: {exc}"})
-                    result = None
-                if result is not None:
-                    _push(result)
-                else:
-                    _push({"type": "frame", "jpeg": _frame_to_jpeg_b64(frame)})
-                time.sleep(0.05)
+                if frame is None:
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        # Losing the device mid-session is exactly the
+                        # "student turned their camera off" case.
+                        if presence is not None:
+                            presence.camera_failed()
+                        _push({"type": "error",
+                               "message": "Camera stopped delivering frames."})
+                        break
+                frame = _orient(frame, view["mirror"], view["invert"])
+                to_analyse.put(frame)
+                frames.publish(_frame_to_jpeg(frame))
+                frame = None
+                gap = time.monotonic() - last
+                if gap < min_gap:
+                    time.sleep(min_gap - gap)
+                last = time.monotonic()
         finally:
             cap.release()
+            to_analyse.put(None)
+
+    def _analysis_thread() -> None:
+        while not stop_event.is_set():
+            frame = to_analyse.take()
+            if frame is None:
+                continue
+            try:
+                with work_lock:
+                    result = _analyse(frame)
+            except Exception as exc:  # noqa: BLE001 – keep the stream alive
+                _push({"type": "error", "message": f"Analysis error: {exc}"})
+                continue
+            if result is not None:
+                _push(result)
 
     cam_thread = threading.Thread(target=_camera_thread, daemon=True)
     cam_thread.start()
+    threading.Thread(target=_analysis_thread, daemon=True).start()
 
     def _resolve_embedding(msg: dict) -> np.ndarray:
         """Target embedding from either a raw blob or a student id.
@@ -576,23 +1061,23 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
             try:
                 with analysis_lock:
                     if action == "start_enroll":
-                        if tracker:
-                            tracker.close()
+                        _retire(tracker)
                         tracker = FaceMeshTracker()
                         guided = GuidedEnrollment(
                             tracker, _embed_largest,
                             directional=msg.get("directional", True),
                         )
+                        guided.mirrored = view["mirror"]
                         liveness = None
                         presence = None
                         mode = "enroll"
                     elif action == "start_liveness":
-                        if tracker:
-                            tracker.close()
+                        _retire(tracker)
                         tracker = FaceMeshTracker()
                         liveness = LivenessChecker(
                             tracker, directional=msg.get("directional", True)
                         )
+                        liveness.mirrored = view["mirror"]
                         guided = None
                         presence = None
                         mode = "liveness"
@@ -616,25 +1101,30 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
                     elif action == "stop":
                         presence = None
                         mode = "idle"
+                    if action == "set_view" or "mirror" in msg or "invert" in msg:
+                        _set_view(msg)
             except Exception as exc:  # noqa: BLE001
                 # A bad control message must not tear down the socket — the
                 # old code let one KeyError kill the whole session.
                 with analysis_lock:
                     mode = "idle"
-                await _send_json(websocket, {"type": "error", "message": str(exc)})
+                async with send_lock:
+                    await _send_json(websocket, {"type": "error", "message": str(exc)})
 
     async def _send_loop() -> None:
         while True:
             result = await result_queue.get()
-            if not await _send_json(websocket, result):
-                return
+            async with send_lock:
+                if not await _send_json(websocket, result):
+                    return
 
     try:
-        await _run_until_first_done(_recv_loop(), _send_loop())
+        await _run_until_first_done(
+            _recv_loop(), _send_loop(), frames.run(websocket, send_lock)
+        )
     finally:
         stop_event.set()
-        if tracker:
-            tracker.close()
+        _retire(tracker)
 
 
 # ── WebSocket: /ws/screen  (Meet Monitor page) ────────────────────────────────
@@ -664,7 +1154,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
 
     stop_event = threading.Event()
     loop = asyncio.get_event_loop()
-    result_queue: asyncio.Queue = asyncio.Queue(maxsize=4)
+    result_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
 
     session_id: int | None = None
     roster_monitor: RosterMonitor | None = None
@@ -673,12 +1163,13 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
     names: dict[int, str] = {}
     unknowns_cache: list[dict] = []
     unknown_registry: dict[int, dict] = {}
-    unknown_ids = itertools.count(1)
     verify_student: int | None = None
     verify_deadline = 0.0
     state_lock = threading.Lock()
 
     def _push(payload: dict) -> None:
+        if payload.get("type") == "alert":
+            _live.alert(payload.get("message", ""), payload.get("level", "info"))
         loop.call_soon_threadsafe(
             lambda p=payload: result_queue.put_nowait(p)
             if not result_queue.full() else None
@@ -705,133 +1196,208 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
             db.clear_time_out(s_id, sid)
             _push({"type": "alert", "message": message, "level": "ok"})
 
-    def _capture_thread(region: dict, missing_after: float) -> None:
-        nonlocal unknowns_cache, verify_student, verify_deadline
+    # Screen → preview and analysis run on separate threads. The preview is
+    # captured at PREVIEW_FPS, downscaled and overlaid with the most recent
+    # analysis boxes; recognition works on the newest frame whenever it is
+    # free. Meeting tiles barely move, so boxes that are a few frames old
+    # still sit on the right faces.
+    PREVIEW_FPS = 24
+    PREVIEW_MAX_W = 1280
+    ANALYSIS_PUSH_EVERY = 0.25  # roster/unknowns updates, unless something changed
+    CROP_REFRESH = 2.0          # re-encode an unknown face's thumbnail at most this often
+
+    frames = _FramePump(loop)
+    send_lock = asyncio.Lock()
+    to_analyse = _LatestFrame()
+    overlay: list[tuple[tuple[int, int, int, int], str, tuple[int, int, int]]] = []
+    crop_cache: dict[int, tuple[float, str]] = {}
+
+    def _preview_thread(region: dict, stop: threading.Event) -> None:
         import mss
+        gap = 1.0 / PREVIEW_FPS
+        follow = None
         try:
             with mss.mss() as sct:
-                while not stop_event.is_set():
+                # A window picked with "Select Window" is captured directly,
+                # wherever it is and whatever covers it. A screen area is a
+                # fixed rectangle of the screen.
+                follow = _WindowFollower.create(region.get("hwnd"), region.get("title", ""))
+                desktop = sct.monitors[0]
+                state = "ok"
+                while not stop.is_set() and not stop_event.is_set():
                     start = time.monotonic()
-                    shot = sct.grab(region)
-                    frame = np.asarray(shot, dtype=np.uint8)[:, :, :3]
-                    frame = np.ascontiguousarray(frame)
+                    if follow is not None:
+                        # The window itself, even behind other windows.
+                        now_state, frame = follow.capture(sct, desktop)
+                        if now_state != state:
+                            msg = follow.describe(now_state, state)
+                            state = now_state
+                            if msg:
+                                _push({"type": "alert", "message": msg[0], "level": msg[1]})
+                        if frame is None:
+                            time.sleep(0.2 if state != "ok" else 0.03)
+                            continue
+                    else:
+                        shot = sct.grab(region)
+                        frame = np.ascontiguousarray(np.asarray(shot, dtype=np.uint8)[:, :, :3])
+                    to_analyse.put(frame)
 
-                    with state_lock:
-                        t = tracker
-                        rm = roster_monitor
-                        embs = embeddings
-                        nms = names
+                    h, w = frame.shape[:2]
+                    k = min(1.0, PREVIEW_MAX_W / float(w))
+                    view = (cv2.resize(frame, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
+                            if k < 1.0 else frame.copy())
+                    boxes = overlay  # swapped atomically by the analysis thread
+                    for (x1, y1, x2, y2), label, colour in boxes:
+                        p1 = (int(x1 * k), int(y1 * k))
+                        p2 = (int(x2 * k), int(y2 * k))
+                        cv2.rectangle(view, p1, p2, colour, 2)
+                        cv2.putText(view, label, (p1[0], max(18, p1[1] - 7)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2, cv2.LINE_AA)
+                    ok, buf = cv2.imencode(".jpg", view, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    if ok:
+                        raw = buf.tobytes()
+                        _live.frame(raw)
+                        frames.publish(raw)
 
-                    if t is None or rm is None:
-                        time.sleep(0.1)
-                        continue
+                    remaining = gap - (time.monotonic() - start)
+                    if remaining > 0:
+                        time.sleep(remaining)
+        except Exception as exc:  # noqa: BLE001
+            _push({"type": "error", "message": str(exc)})
+        finally:
+            if follow is not None:
+                follow.close()
+            to_analyse.put(None)
 
-                    matches, unknown_faces = t.process(frame)
-                    rm.update({m[0] for m in matches})
+    def _analysis_thread(stop: threading.Event) -> None:
+        nonlocal unknowns_cache, verify_student, verify_deadline, overlay
+        last_push = 0.0
+        last_sig = None
+        last_pass = 0.0
+        try:
+            while not stop.is_set() and not stop_event.is_set():
+                frame = to_analyse.take()
+                if frame is None:
+                    continue
 
-                    # On-demand re-verification: the instructor tapped a
-                    # student in the roster and is waiting for a fresh answer.
-                    with state_lock:
-                        pending = verify_student
-                    if pending is not None:
-                        hit = next((m for m in matches if m[0] == pending), None)
-                        s_id = session_id
-                        if hit is not None:
-                            with state_lock:
-                                verify_student = None
-                            msg_txt = (
-                                f"{nms.get(pending, 'Student')} re-verified on camera "
-                                f"(score {hit[1]:.2f})."
-                            )
-                            if s_id is not None:
-                                db.log_event(s_id, pending, "verified", msg_txt)
-                            _push({"type": "verify_result", "student_id": pending,
-                                   "ok": True, "score": float(hit[1]),
-                                   "message": msg_txt})
-                            _push({"type": "alert", "message": msg_txt, "level": "ok"})
-                        elif time.monotonic() >= verify_deadline:
-                            with state_lock:
-                                verify_student = None
-                            msg_txt = (
-                                f"{nms.get(pending, 'Student')} could not be "
-                                f"re-verified — face not recognised on screen."
-                            )
-                            if s_id is not None:
-                                db.log_event(s_id, pending, "identity_mismatch", msg_txt)
-                            _push({"type": "verify_result", "student_id": pending,
-                                   "ok": False, "score": 0.0, "message": msg_txt})
-                            _push({"type": "alert", "message": msg_txt, "level": "error"})
+                with state_lock:
+                    t = tracker
+                    rm = roster_monitor
+                    nms = names
 
-                    ulist = []
-                    for emb, (x1, y1, x2, y2) in unknown_faces:
-                        h, w = frame.shape[:2]
+                if t is None or rm is None:
+                    continue
+
+                # Balanced mode paces recognition so it leaves CPU for the
+                # preview and the meeting app; High performance does not.
+                gap = perf.analysis_min_interval() - (time.monotonic() - last_pass)
+                if gap > 0:
+                    time.sleep(gap)
+                    fresh = to_analyse.take(timeout=0)
+                    if fresh is not None:
+                        frame = fresh
+                last_pass = time.monotonic()
+
+                matches, unknown_faces = t.process(frame)
+                rm.update({m[0] for m in matches})
+
+                # On-demand re-verification: the instructor tapped a
+                # student in the roster and is waiting for a fresh answer.
+                with state_lock:
+                    pending = verify_student
+                if pending is not None:
+                    hit = next((m for m in matches if m[0] == pending), None)
+                    s_id = session_id
+                    if hit is not None:
+                        with state_lock:
+                            verify_student = None
+                        msg_txt = (
+                            f"{nms.get(pending, 'Student')} re-verified on camera "
+                            f"(score {hit[1]:.2f})."
+                        )
+                        if s_id is not None:
+                            db.log_event(s_id, pending, "verified", msg_txt)
+                        _push({"type": "verify_result", "student_id": pending,
+                               "ok": True, "score": float(hit[1]),
+                               "message": msg_txt})
+                        _push({"type": "alert", "message": msg_txt, "level": "ok"})
+                    elif time.monotonic() >= verify_deadline:
+                        with state_lock:
+                            verify_student = None
+                        msg_txt = (
+                            f"{nms.get(pending, 'Student')} could not be "
+                            f"re-verified — face not recognised on screen."
+                        )
+                        if s_id is not None:
+                            db.log_event(s_id, pending, "identity_mismatch", msg_txt)
+                        _push({"type": "verify_result", "student_id": pending,
+                               "ok": False, "score": 0.0, "message": msg_txt})
+                        _push({"type": "alert", "message": msg_txt, "level": "error"})
+
+                # Unknown faces keep their tracker id while they stay on
+                # screen, so a click always enrolls the face that was shown.
+                now = time.monotonic()
+                h, w = frame.shape[:2]
+                ulist = []
+                for emb, (x1, y1, x2, y2), uid in unknown_faces:
+                    cached = crop_cache.get(uid)
+                    if cached is None or now - cached[0] >= CROP_REFRESH:
                         pad_x = int((x2 - x1) * 0.3)
                         pad_y = int((y2 - y1) * 0.3)
                         crop = frame[
                             max(0, y1 - pad_y):min(h, y2 + pad_y),
                             max(0, x1 - pad_x):min(w, x2 + pad_x),
-                        ].copy()
+                        ]
                         if crop.size == 0:
                             continue
-                        _, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                        # Each unknown face gets a stable id. Enrolling by list
-                        # position used to attach the wrong face whenever the
-                        # list shifted between the click and the message.
-                        uid = next(unknown_ids)
-                        entry = {
-                            "uid": uid,
-                            "embedding": base64.b64encode(emb.tobytes()).decode(),
-                            "crop_jpeg": base64.b64encode(buf).decode(),
-                            "bbox": [x1, y1, x2, y2],
-                        }
-                        ulist.append(entry)
-                        unknown_registry[uid] = entry
-                    while len(unknown_registry) > 64:
-                        unknown_registry.pop(next(iter(unknown_registry)))
-                    with state_lock:
-                        unknowns_cache = ulist
+                        cached = (now, _frame_to_jpeg_b64(crop, 70))
+                        crop_cache[uid] = cached
+                    entry = {
+                        "uid": uid,
+                        "embedding": base64.b64encode(emb.tobytes()).decode(),
+                        "crop_jpeg": cached[1],
+                        "bbox": [x1, y1, x2, y2],
+                    }
+                    ulist.append(entry)
+                    unknown_registry[uid] = entry
+                live = {u["uid"] for u in ulist}
+                for uid in [u for u in crop_cache if u not in live]:
+                    crop_cache.pop(uid, None)
+                while len(unknown_registry) > 64:
+                    unknown_registry.pop(next(iter(unknown_registry)))
+                with state_lock:
+                    unknowns_cache = ulist
 
-                    # Build annotated frame
-                    annotated = frame.copy()
-                    for sid, score, (x1, y1, x2, y2) in matches:
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (80, 220, 120), 2)
-                        label = f"{nms.get(sid, '?')} {score:.2f}"
-                        cv2.putText(annotated, label, (x1, max(20, y1 - 8)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (80, 220, 120), 2)
-                    for i, u in enumerate(ulist):
-                        x1, y1, x2, y2 = u["bbox"]
-                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (90, 90, 240), 2)
-                        cv2.putText(annotated, f"Unknown {i+1}", (x1, max(20, y1 - 8)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (90, 90, 240), 2)
+                boxes = [((x1, y1, x2, y2), f"{nms.get(sid, '?')} {score:.2f}", (80, 220, 120))
+                         for sid, score, (x1, y1, x2, y2) in matches]
+                boxes += [(tuple(u["bbox"]), f"Unknown {i + 1}", (90, 90, 240))
+                          for i, u in enumerate(ulist)]
+                overlay = boxes
 
-                    _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                    jpeg = base64.b64encode(buf).decode()
-
-                    roster = rm.status()
-                    payload = {
-                        "type": "frame",
-                        "jpeg": jpeg,
+                roster = rm.status()
+                _live.stats(roster, len(ulist))
+                sig = (tuple((r["id"], r["state"]) for r in roster), tuple(sorted(live)))
+                if sig != last_sig or now - last_push >= ANALYSIS_PUSH_EVERY:
+                    last_sig, last_push = sig, now
+                    _push({
+                        "type": "analysis",
                         "roster": roster,
                         "unknowns": [{"uid": u["uid"], "crop_jpeg": u["crop_jpeg"],
                                       "bbox": u["bbox"]} for u in ulist],
-                    }
-                    loop.call_soon_threadsafe(
-                        lambda p=payload: result_queue.put_nowait(p)
-                        if not result_queue.full() else None
-                    )
-                    elapsed = time.monotonic() - start
-                    time.sleep(max(0, 0.067 - elapsed))  # ~15 fps
+                    })
         except Exception as exc:  # noqa: BLE001
-            loop.call_soon_threadsafe(
-                result_queue.put_nowait,
-                {"type": "error", "message": str(exc)},
-            )
+            _push({"type": "error", "message": str(exc)})
 
     cap_thread: threading.Thread | None = None
+    run_stop = threading.Event()
+
+    async def _say(data: dict) -> bool:
+        async with send_lock:
+            return await _send_json(websocket, data)
 
     async def _recv_loop() -> None:
         nonlocal session_id, roster_monitor, tracker, embeddings, names, cap_thread
-        nonlocal verify_student, verify_deadline
+        nonlocal verify_student, verify_deadline, overlay, run_stop
         try:
             while True:
                 msg = await websocket.receive_json()
@@ -839,7 +1405,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
 
                 if action == "start":
                     if not FaceEngine.is_ready():
-                        await _send_json(websocket, {"type": "error", "message": "AI not ready"})
+                        await _say({"type": "error", "message": "AI not ready"})
                         continue
                     region = msg["region"]
                     missing_after = float(msg.get("missing_after", 5.0))
@@ -860,17 +1426,24 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         tracker = t
                         roster_monitor = rm
 
-                    stop_event.clear()
+                    # Each run gets its own stop flag, so threads from a
+                    # previous run can never keep going after a quick restart.
+                    run_stop.set()
+                    run_stop = threading.Event()
+                    overlay = []
                     cap_thread = threading.Thread(
-                        target=_capture_thread,
-                        args=(region, missing_after),
-                        daemon=True,
+                        target=_preview_thread, args=(region, run_stop), daemon=True,
                     )
                     cap_thread.start()
-                    await _send_json(websocket, {"type": "started", "session_id": sid})
+                    threading.Thread(target=_analysis_thread, args=(run_stop,),
+                                     daemon=True).start()
+                    _live.start(session_name or "Meet session")
+                    _live.stats(rm.status(), 0)
+                    await _say({"type": "started", "session_id": sid})
 
                 elif action == "stop":
-                    stop_event.set()
+                    run_stop.set()
+                    _live.stop()
                     s_id = session_id
                     if s_id is not None:
                         db.end_session(s_id)
@@ -878,7 +1451,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         session_id = None
                         tracker = None
                         roster_monitor = None
-                    await _send_json(websocket, {"type": "stopped"})
+                    await _say({"type": "stopped"})
 
                 elif action == "verify":
                     student_id = msg.get("student_id")
@@ -886,7 +1459,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         t = tracker
                         active = session_id is not None
                     if student_id is None or not active or t is None:
-                        await _send_json(websocket, {
+                        await _say({
                             "type": "error",
                             "message": "Start monitoring before verifying a student.",
                         })
@@ -899,7 +1472,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         verify_deadline = time.monotonic() + float(
                             msg.get("timeout", 8.0)
                         )
-                    await _send_json(websocket, {
+                    await _say({
                         "type": "verify_started", "student_id": int(student_id),
                     })
 
@@ -911,7 +1484,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         u = unknown_registry.get(uid) if uid is not None else None
                     if u is None:
                         if idx < 0 or idx >= len(cache):
-                            await _send_json(websocket, {
+                            await _say({
                                 "type": "error",
                                 "message": "That face is no longer on screen — "
                                            "click it again from the current list.",
@@ -923,7 +1496,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                     try:
                         new_id = db.add_student(msg["student_no"], msg["name"], emb)
                     except Exception as exc:
-                        await _send_json(websocket, {"type": "error", "message": str(exc)})
+                        await _say({"type": "error", "message": str(exc)})
                         continue
                     with state_lock:
                         embeddings.append((new_id, emb))
@@ -936,12 +1509,12 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                     if s_id:
                         db.log_event(s_id, new_id, "verified",
                                      f"{msg['name']} enrolled live from meeting tile.")
-                    await _send_json(websocket, {"type": "enrolled", "id": new_id,
+                    await _say({"type": "enrolled", "id": new_id,
                                                   "name": msg["name"]})
         except (WebSocketDisconnect, asyncio.CancelledError, RuntimeError):
             pass
         except Exception as exc:  # noqa: BLE001
-            await _send_json(websocket, {"type": "error", "message": str(exc)})
+            await _say({"type": "error", "message": str(exc)})
         finally:
             stop_event.set()
             s_id = session_id
@@ -951,10 +1524,14 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
     async def _send_loop() -> None:
         while True:
             result = await result_queue.get()
-            if not await _send_json(websocket, result):
-                return
+            async with send_lock:
+                if not await _send_json(websocket, result):
+                    return
 
     try:
-        await _run_until_first_done(_recv_loop(), _send_loop())
+        await _run_until_first_done(
+            _recv_loop(), _send_loop(), frames.run(websocket, send_lock)
+        )
     finally:
         stop_event.set()
+        _live.stop()

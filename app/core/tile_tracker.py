@@ -9,6 +9,7 @@ haven't been re-verified recently. Steady-state cost is detection only.
 
 from __future__ import annotations
 
+import itertools
 import time
 from typing import Callable
 
@@ -43,8 +44,9 @@ class TileTracker:
         self._engine = engine
         self._get_known = get_known
         self._refresh_every = refresh_every
-        # each track: {bbox, kps, sid, score, emb, embedded_at}
+        # each track: {uid, bbox, kps, sid, score, emb, embedded_at}
         self._tracks: list[dict] = []
+        self._uids = itertools.count(1)
 
     def reidentify(self) -> None:
         """Re-match cached embeddings against the (updated) known list.
@@ -71,11 +73,13 @@ class TileTracker:
 
     def process(self, frame: np.ndarray) -> tuple[
         list[tuple[int, float, tuple[int, int, int, int]]],
-        list[tuple[np.ndarray | None, tuple[int, int, int, int]]],
+        list[tuple[np.ndarray, tuple[int, int, int, int], int]],
     ]:
         """One pass: detect, carry identities forward, embed only what's needed.
 
-        Returns (matches, unknowns) shaped like FaceEngine.analyze_all.
+        Returns (matches, unknowns): matches as in FaceEngine.analyze_all;
+        unknowns as (embedding, bbox, uid) where uid stays the same for as
+        long as that face keeps being tracked.
         """
         detections = self._engine.detect_faces(frame)
         now = time.monotonic()
@@ -94,6 +98,7 @@ class TileTracker:
                 next_tracks.append(best_track)
             else:
                 next_tracks.append({
+                    "uid": next(self._uids),
                     "bbox": bbox, "kps": kps, "sid": None, "score": 0.0,
                     "emb": None, "embedded_at": None,
                 })
@@ -117,12 +122,12 @@ class TileTracker:
 
         # report each student once (best score), like analyze_all
         best: dict[int, dict] = {}
-        unknowns: list[tuple[np.ndarray | None, tuple]] = []
+        unknowns: list[tuple[np.ndarray, tuple, int]] = []
         for t in next_tracks:
             if t["sid"] is None:
                 # skip brand-new boxes that haven't been embedded yet
                 if t["emb"] is not None:
-                    unknowns.append((t["emb"], t["bbox"]))
+                    unknowns.append((t["emb"], t["bbox"], t["uid"]))
             elif t["sid"] not in best or t["score"] > best[t["sid"]]["score"]:
                 best[t["sid"]] = t
         matches = [(sid, t["score"], t["bbox"]) for sid, t in best.items()]

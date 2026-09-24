@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import VideoCanvas from '../components/VideoCanvas'
+import { useFrameFeed, frameToBase64, type Frame } from '../components/frameFeed'
+import PipWindow from '../components/PipWindow'
+import CameraViewControls, { useCameraView } from '../components/CameraViewControls'
+import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+
+const goApp = () => (window as any)['go']?.['main']?.['App']
 
 const API = 'http://127.0.0.1:7788'
 const WS  = 'ws://127.0.0.1:7788'
@@ -26,7 +32,14 @@ export default function RegisterPage() {
   const [name, setName]                 = useState('')
   const [students, setStudents]         = useState<Student[]>([])
   const [searchQuery, setSearchQuery]   = useState('')
-  const [frame, setFrame]               = useState<string | null>(null)
+  // Live frames go straight from the socket to the canvas (see frameFeed);
+  // React only tracks whether there is a picture at all.
+  const feed = useFrameFeed()
+  const [hasFrame, setHasFrame]         = useState(false)
+  const setFrame = useCallback((f: Frame) => {
+    feed.push(f)
+    setHasFrame(f !== null)
+  }, [feed])
   const [mode, setMode]                 = useState<string>('idle')
   const [progress, setProgress]         = useState<EnrollStep | null>(null)
   const [statusMsg, setStatusMsg]       = useState('Capture face samples via webcam or import photos.')
@@ -37,7 +50,22 @@ export default function RegisterPage() {
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set())
   // Field validation errors — shown as red border + shake
   const [fieldErrors, setFieldErrors]   = useState<{ studentNo?: boolean; name?: boolean }>({})
+  // Live Face Viewport popped out into a floating picture-in-picture panel
+  const [pipOpen, setPipOpen]           = useState(false)
+  // Where the popped-out viewer lives: its own desktop window when the Go
+  // shell supports it (can leave the app frame), else the in-app panel.
+  const [pipKind, setPipKind]           = useState<'pending' | 'native' | 'inapp'>('pending')
   const wsRef = useRef<WebSocket | null>(null)
+  // Mirror / invert the webcam; applied by the sidecar to the frames themselves.
+  const [cameraView, setCameraView]     = useCameraView()
+  const cameraViewRef = useRef(cameraView)
+  useEffect(() => {
+    cameraViewRef.current = cameraView
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ action: 'set_view', ...cameraView }))
+    }
+  }, [cameraView])
   const prevCountRef = useRef<number>(-1)
 
   const loadStudents = useCallback(async () => {
@@ -54,6 +82,35 @@ export default function RegisterPage() {
   useEffect(() => {
     loadStudents()
   }, [loadStudents])
+
+  // Pop the viewer out into a real window that can be dragged outside the app.
+  useEffect(() => {
+    if (!pipOpen) return
+    setPipKind('pending')
+    let cancelled = false
+    const open = goApp()?.['PipOpen']
+    if (!open) {
+      setPipKind('inapp')
+      return
+    }
+    Promise.resolve(open('Live Face'))
+      .then((ok: boolean) => { if (!cancelled) setPipKind(ok ? 'native' : 'inapp') })
+      .catch(() => { if (!cancelled) setPipKind('inapp') })
+    return () => {
+      cancelled = true
+      goApp()?.['PipClose']?.()
+    }
+  }, [pipOpen])
+
+  // The native window's return button sends it back into the card.
+  useEffect(() => {
+    try {
+      EventsOn('pip:closed', () => setPipOpen(false))
+    } catch { /* not running inside the desktop shell */ }
+    return () => {
+      try { EventsOff('pip:closed') } catch { /* ignore */ }
+    }
+  }, [])
 
   const validateFields = (): boolean => {
     const errors: { studentNo?: boolean; name?: boolean } = {}
@@ -84,17 +141,22 @@ export default function RegisterPage() {
     setStatusMsg('Connecting to camera...')
 
     const ws = new WebSocket(`${WS}/ws/camera`)
+    ws.binaryType = 'arraybuffer' // preview frames arrive as raw JPEG bytes
     wsRef.current = ws
 
     ws.onopen = () => {
+      ws.send(JSON.stringify({ action: 'set_view', ...cameraViewRef.current }))
       ws.send(JSON.stringify({ action: 'start_enroll', directional: true }))
       setMode('webcam')
       setStatusMsg('Follow the on-screen prompts to capture 5 poses.')
     }
 
     ws.onmessage = (ev) => {
+      if (typeof ev.data !== 'string') {
+        setFrame(ev.data as ArrayBuffer)
+        return
+      }
       const data = JSON.parse(ev.data)
-      if (data.jpeg) setFrame(data.jpeg)
       if (data.type === 'enroll') {
         setProgress(data)
         // Detect a newly completed step and trigger the pop animation
@@ -147,6 +209,24 @@ export default function RegisterPage() {
     setFrame(null)
     prevCountRef.current = -1
   }
+
+  // Keep the native viewer fed with frames and status while it is open.
+  const pipNative = pipOpen && pipKind === 'native'
+  useEffect(() => {
+    if (!pipNative) return
+    const send = (f: Frame) => goApp()?.['PipFrame']?.(frameToBase64(f))
+    send(feed.latest)
+    return feed.subscribe(send)
+  }, [pipNative, feed])
+  useEffect(() => {
+    if (!pipNative) return
+    goApp()?.['PipStatus']?.(
+      mode === 'webcam' ? 'Streaming' : 'Idle',
+      progress ? `${Math.min(progress.count, 5)} / 5` : '0 / 5',
+      statusMsg,
+      mode === 'webcam' ? 'Connecting to camera...' : 'Start webcam capture or import photos',
+    )
+  }, [pipNative, mode, progress, statusMsg])
 
   // Leaving the page must release the webcam.
   useEffect(() => {
@@ -486,18 +566,64 @@ export default function RegisterPage() {
               </div>
               <span className="card-title-text">Live Face Viewport</span>
             </div>
-            <span className="card-count-pill">{mode === 'webcam' ? 'Streaming' : 'Idle'}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="card-count-pill">{mode === 'webcam' ? 'Streaming' : 'Idle'}</span>
+              <CameraViewControls view={cameraView} onChange={setCameraView} />
+              <button
+                className={`btn-icon ${pipOpen ? 'btn-icon-active' : ''}`}
+                onClick={() => setPipOpen((v) => !v)}
+                title={pipOpen ? 'Return to card' : 'Picture-in-picture'}
+                aria-label="Picture-in-picture"
+                aria-pressed={pipOpen}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="2" />
+                  <rect x="12" y="12" width="7" height="5" rx="1" fill="currentColor" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 280 }}>
-            <VideoCanvas
-              jpegBase64={frame}
-              idle={!frame}
-              idleText={mode === 'webcam' ? 'Connecting to camera...' : 'Start webcam capture or import photos'}
-              className="flex-1"
-            />
+            {pipOpen ? (
+              <div className="video-idle pip-placeholder" style={{ flex: 1 }}>
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.4" style={{ opacity: 0.6 }}>
+                  <rect x="2" y="4" width="20" height="16" rx="2" />
+                  <rect x="12" y="12" width="7" height="5" rx="1" />
+                </svg>
+                <p style={{ fontSize: 13, color: 'var(--muted)' }}>
+                  {pipKind === 'native' ? 'Playing in a pop-out window' : 'Playing in picture-in-picture'}
+                </p>
+                <button className="btn-ghost" onClick={() => setPipOpen(false)}>Return to card</button>
+              </div>
+            ) : (
+              <VideoCanvas
+                feed={feed}
+                idle={!hasFrame}
+                idleText={mode === 'webcam' ? 'Connecting to camera...' : 'Start webcam capture or import photos'}
+                className="flex-1"
+              />
+            )}
           </div>
         </div>
+
+        {pipOpen && pipKind === 'inapp' && (
+          <PipWindow
+            title="Live Face"
+            badge={mode === 'webcam' ? 'Streaming' : 'Idle'}
+            onReturn={() => setPipOpen(false)}
+          >
+            <VideoCanvas
+              feed={feed}
+              idle={!hasFrame}
+              idleText={mode === 'webcam' ? 'Connecting to camera...' : 'Start webcam capture or import photos'}
+            />
+            <div className="pip-status">
+              <span className="pip-status-count">{progress ? `${Math.min(progress.count, 5)} / 5` : '0 / 5'}</span>
+              <span className="pip-status-msg">{statusMsg}</span>
+            </div>
+          </PipWindow>
+        )}
 
         {/* Card 3: Enrolled Roster */}
         <div className="launcher-card">

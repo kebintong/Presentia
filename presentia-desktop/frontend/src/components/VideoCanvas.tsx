@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react'
+import { decodeFrame, type Frame, type FrameFeed } from './frameFeed'
 
 interface Annotation {
   bbox: [number, number, number, number]
@@ -7,6 +8,9 @@ interface Annotation {
 }
 
 interface VideoCanvasProps {
+  /** Live frames, drawn as they arrive without re-rendering the page. */
+  feed?: FrameFeed
+  /** A single base64 JPEG (legacy / still images). */
   jpegBase64?: string | null
   annotations?: Annotation[]
   idle?: boolean
@@ -15,10 +19,15 @@ interface VideoCanvasProps {
 }
 
 /**
- * Renders JPEG frames (base64) onto a <canvas> with optional bounding-box
- * annotation overlays. Falls back to a glass idle placeholder.
+ * Renders JPEG frames onto a <canvas>, with optional bounding-box overlays,
+ * or an idle placeholder.
+ *
+ * With `feed`, each frame is decoded off the UI thread (createImageBitmap)
+ * and drawn directly. If frames arrive faster than they can be decoded, the
+ * in-between ones are skipped, so the picture never falls behind.
  */
 export default function VideoCanvas({
+  feed,
   jpegBase64,
   annotations = [],
   idle = false,
@@ -26,27 +35,34 @@ export default function VideoCanvas({
   className = '',
 }: VideoCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const imgRef = useRef<HTMLImageElement>(new Image())
+  const annotationsRef = useRef(annotations)
+  annotationsRef.current = annotations
+
+  const showIdle = idle || (!feed && !jpegBase64)
 
   useEffect(() => {
-    if (!jpegBase64 || idle) return
+    if (showIdle) return
     const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return
 
-    const img = imgRef.current
-    img.onload = () => {
-      canvas.width = img.width
-      canvas.height = img.height
+    let busy = false
+    let pending: Frame | undefined
+    let alive = true
+
+    const draw = (img: ImageBitmap | HTMLImageElement) => {
+      const w = img.width
+      const h = img.height
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w
+        canvas.height = h
+      }
       ctx.drawImage(img, 0, 0)
-
-      for (const ann of annotations) {
+      for (const ann of annotationsRef.current) {
         const [x1, y1, x2, y2] = ann.bbox
         ctx.strokeStyle = ann.color
         ctx.lineWidth = 2
         ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
-
         ctx.font = '600 12px Manrope, sans-serif'
         const tw = ctx.measureText(ann.label).width
         ctx.fillStyle = ann.color + 'cc'
@@ -55,10 +71,40 @@ export default function VideoCanvas({
         ctx.fillText(ann.label, x1 + 5, Math.max(13, y1 - 4))
       }
     }
-    img.src = 'data:image/jpeg;base64,' + jpegBase64
-  }, [jpegBase64, annotations, idle])
 
-  if (idle || !jpegBase64) {
+    const show = async (frame: Frame) => {
+      if (frame === null) return
+      if (busy) {
+        pending = frame // keep only the newest
+        return
+      }
+      busy = true
+      try {
+        const img = await decodeFrame(frame)
+        if (alive) draw(img)
+        if ('close' in img) img.close()
+      } catch {
+        /* a corrupt frame — skip it */
+      } finally {
+        busy = false
+      }
+      if (alive && pending !== undefined) {
+        const next = pending
+        pending = undefined
+        show(next)
+      }
+    }
+
+    if (feed) {
+      show(feed.latest)
+      const off = feed.subscribe(show)
+      return () => { alive = false; off() }
+    }
+    show(jpegBase64 ?? null)
+    return () => { alive = false }
+  }, [feed, jpegBase64, showIdle])
+
+  if (showIdle) {
     return (
       <div
         className={`video-idle glass-panel ${className}`}

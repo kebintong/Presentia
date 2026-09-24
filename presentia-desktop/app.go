@@ -91,6 +91,10 @@ func (a *App) startup(ctx context.Context) {
 	}
 	frozenSidecar := filepath.Join(exeDir, "sidecar", sidecarExeName)
 
+	// Never talk to a sidecar left over from an earlier run: it may be old
+	// code, and it keeps the webcam and port busy.
+	clearStaleSidecar(ctx)
+
 	var cmd *exec.Cmd
 	if _, err := os.Stat(frozenSidecar); err == nil {
 		wailsruntime.LogInfo(ctx, "Using bundled sidecar: "+frozenSidecar)
@@ -129,10 +133,15 @@ func (a *App) startup(ctx context.Context) {
 	// Per-user, always-writable data dir (SQLite DB, etc.) — read by
 	// app/data/db.py's _resolve_db_path(). Falls back to APPDATA on
 	// Windows, ~/Library/Application Support on macOS, XDG on Linux.
-	appData, _ := os.UserConfigDir()
-	if appData != "" {
-		cmd.Env = append(os.Environ(), "PRESENTIA_DATA_DIR="+filepath.Join(appData, "Presentia"))
+	env := os.Environ()
+	if appData, _ := os.UserConfigDir(); appData != "" {
+		env = append(env, "PRESENTIA_DATA_DIR="+filepath.Join(appData, "Presentia"))
 	}
+	// The sidecar watches this process and exits as soon as it is gone —
+	// a second guarantee next to the Job Object (superviseChild), and the
+	// only one on Linux.
+	env = append(env, fmt.Sprintf("PRESENTIA_PARENT_PID=%d", os.Getpid()))
+	cmd.Env = env
 
 	// Redirect sidecar output to log files and hide its console window on Windows.
 	tmpDir := os.TempDir()
@@ -189,6 +198,36 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	wailsruntime.LogWarning(ctx, "Startup complete")
+}
+
+// clearStaleSidecar makes sure nothing from a previous run is serving our
+// port: newer sidecars are asked to exit; anything still answering after
+// that (an older build) is ended if it is recognisably ours.
+func clearStaleSidecar(ctx context.Context) {
+	c := &http.Client{Timeout: 700 * time.Millisecond}
+	alive := func() bool {
+		resp, err := c.Get(sidecarURL + "/api/engine/status")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return true
+	}
+	if !alive() {
+		return
+	}
+	wailsruntime.LogWarning(ctx, "A sidecar from an earlier run is still running — stopping it")
+	if resp, err := c.Post(sidecarURL+"/api/shutdown", "application/json", nil); err == nil {
+		resp.Body.Close()
+	}
+	for i := 0; i < 10; i++ {
+		time.Sleep(200 * time.Millisecond)
+		if !alive() {
+			return
+		}
+	}
+	killPortOwner(7788)
+	time.Sleep(400 * time.Millisecond)
 }
 
 // beforeClose is called before the window is closed. Returning true blocks close.
@@ -293,6 +332,8 @@ type WindowInfo struct {
 	Top    int    `json:"top"`
 	Width  int    `json:"width"`
 	Height int    `json:"height"`
+	// Hwnd lets the sidecar follow the window when it moves or resizes.
+	Hwnd uint64 `json:"hwnd"`
 }
 
 // GetOpenWindows returns all visible, titled top-level windows so the
@@ -335,6 +376,7 @@ func (a *App) EnterPickerMode() {
 	if a.ctx == nil {
 		return
 	}
+	wailsruntime.WindowShow(a.ctx) // may be hidden in the tray (bubble mode)
 	wailsruntime.WindowUnminimise(a.ctx)
 	time.Sleep(80 * time.Millisecond)
 	wailsruntime.WindowMaximise(a.ctx)
@@ -347,6 +389,23 @@ func (a *App) ExitPickerMode() {
 		return
 	}
 	wailsruntime.WindowUnmaximise(a.ctx)
+	bubbleTaskDone()
+}
+
+// BubbleTaskDone sends the window back to the tray after a bubble action
+// that needed it on screen (Select Window). Does nothing otherwise.
+func (a *App) BubbleTaskDone() {
+	bubbleTaskDone()
+}
+
+// ShowMainWindow brings the window out of the tray, e.g. to show a message
+// the instructor must see while the bubble is up.
+func (a *App) ShowMainWindow() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.WindowShow(a.ctx)
+	wailsruntime.WindowUnminimise(a.ctx)
 }
 
 // OpenBubble spawns the native Win32 floating bubble window that lives above
@@ -357,13 +416,42 @@ func (a *App) OpenBubble() {
 }
 
 // SetBubbleTheme keeps the native bubble in step with the app's dark/light
-// setting. The bubble is painted with GDI and cannot read the stylesheet, so
+// setting. The bubble is a native window and cannot read the stylesheet, so
 // the frontend pushes the current theme down whenever it changes.
 func (a *App) SetBubbleTheme(dark bool) {
 	setBubbleThemeNative(dark)
 }
 
+// SetBubbleStyle turns the experimental iridescent logo and dial on or off,
+// repainting the bubble in place if it is already on screen.
+func (a *App) SetBubbleStyle(iridescent bool) {
+	setBubbleStyleNative(iridescent)
+}
+
 // CloseBubble destroys the native bubble window.
 func (a *App) CloseBubble() {
 	CloseFloatingBubble()
+}
+
+// PipOpen pops the Live Face viewer out into its own always-on-top window
+// that can be dragged outside the app. Returns false where that is not
+// supported, and the frontend keeps its in-app panel instead. The window
+// emits "pip:closed" when the user sends it back to its card.
+func (a *App) PipOpen(title string) bool {
+	return openPipNative(a, title)
+}
+
+// PipFrame hands the pop-out viewer the latest base64 JPEG frame ("" = idle).
+func (a *App) PipFrame(jpegB64 string) {
+	pipFrameNative(jpegB64)
+}
+
+// PipStatus updates the pop-out viewer's badge, step count and prompt.
+func (a *App) PipStatus(badge, count, msg, idleText string) {
+	pipStatusNative(badge, count, msg, idleText)
+}
+
+// PipClose closes the pop-out viewer if it is open.
+func (a *App) PipClose() {
+	closePipNative()
 }

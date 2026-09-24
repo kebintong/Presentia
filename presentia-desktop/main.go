@@ -19,8 +19,8 @@ func main() {
 		Title:            "Presentia",
 		Width:            1200,
 		Height:           740,
-		MinWidth:         900,
-		MinHeight:        600,
+		MinWidth:         460, // the UI is responsive down to the pinned compact panel
+		MinHeight:        360,
 		Frameless:        true,
 		BackgroundColour: &options.RGBA{R: 15, G: 20, B: 28, A: 1},
 		AssetServer: &assetserver.Options{

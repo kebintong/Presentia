@@ -26,6 +26,9 @@ datas = []
 binaries = []
 hiddenimports = []
 
+# "onnxruntime" is also the import name of onnxruntime-directml (the Windows
+# build, which adds GPU support through DirectML) — collect_all picks up its
+# DirectML.dll either way.
 for pkg in ("onnxruntime", "insightface", "mediapipe", "cv2", "uvicorn"):
     d, b, h = collect_all(pkg)
     datas += d
@@ -64,6 +67,7 @@ hiddenimports += [
     "app.core.camera",
     "app.core.enrollment",
     "app.core.face_engine",
+    "app.core.perf",
     "app.core.liveness",
     "app.core.monitor",
     "app.core.roster_monitor",
@@ -123,7 +127,8 @@ exe = EXE(
     upx=False,          # UPX + onnxruntime/opencv DLLs is a common source of
                          # false-positive AV flags; leave it off.
     console=False,      # no console window; errors go to the log files.
-    icon=None,
+    # Same Presentia mark as the desktop app (replaces the default icon).
+    icon=str(PROJECT_ROOT / "presentia-desktop" / "build" / "windows" / "icon.ico"),
 )
 
 coll = COLLECT(

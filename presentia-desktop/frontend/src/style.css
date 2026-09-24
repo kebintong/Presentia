@@ -4,7 +4,9 @@
 /* ══════════════════════════════════════════════════════════════════
    Presentia — Flat Design System
    Solid surfaces, 1px borders, no gradients and no backdrop blur.
-   Single accent: Presentia Blue #1C77C3. Dark and light themes.
+   Single accent: Presentia Cyan #42D4F9. Dark and light themes.
+   Cyan is too light for white text (1.75:1), so anything filled with
+   the accent takes --on-accent (deep navy) for its text and icons.
    ══════════════════════════════════════════════════════════════════ */
 
 /* ── Default: Dark Mode Tokens ───────────────────────────────────── */
@@ -21,22 +23,24 @@
   --muted:        #93A1B8;
   --muted-lo:     #5A6A84;
 
-  /* ── Presentia blue, flat ── */
-  --accent:        #1C77C3;
-  --accent-hover:  #2589DA;
-  --accent-deep:   #155CA0;
-  --accent-vivid:  #58A9E2;
-  --accent-cyan:   #58A9E2;
-  --accent-glow:   rgba(28, 119, 195, 0.35);
-  --accent-tint:   rgba(28, 119, 195, 0.16);
+  /* ── Presentia cyan, flat ── */
+  --accent:        #42D4F9;
+  --accent-hover:  #6ADEFB;
+  --accent-deep:   #14A9D3;
+  --accent-vivid:  #42D4F9;   /* accent as text/icons on surfaces */
+  --accent-cyan:   #42D4F9;
+  --accent-glow:   rgba(66, 212, 249, 0.35);
+  --accent-tint:   rgba(66, 212, 249, 0.14);
+  --accent-line:   rgba(66, 212, 249, 0.32);
+  --on-accent:     #062530;   /* text/icons on accent fills */
 
   --emerald:       #10B981;
   --emerald-deep:  #059669;
   --emerald-glow:  rgba(16, 185, 129, 0.25);
 
-  --purple:        #58A9E2;
-  --purple-deep:   #155CA0;
-  --purple-glow:   rgba(28, 119, 195, 0.25);
+  --purple:        #42D4F9;
+  --purple-deep:   #14A9D3;
+  --purple-glow:   rgba(66, 212, 249, 0.25);
 
   /* ── Status ── */
   --present:      #10B981;
@@ -64,9 +68,9 @@
   --input-border:    #2E3B56;
   --pill-bg:         #1A2440;
   --pill-border:     #2E3B56;
-  --tip-bg:          #152740;
-  --tip-border:      #26466B;
-  --tip-color:       #A9CDEB;
+  --tip-bg:          #122A3C;
+  --tip-border:      #1E4A62;
+  --tip-color:       #9BE6FB;
   --select-opt-bg:   #16203A;
   --video-idle-bg:   #121B31;
   --overlay-bg:      rgba(9, 14, 26, 0.88);
@@ -89,21 +93,23 @@
   --muted:        #5A6779;
   --muted-lo:     #94A3B8;
 
-  --accent:        #1C77C3;
-  --accent-hover:  #176BB0;
-  --accent-deep:   #155CA0;
-  --accent-vivid:  #1C77C3;
-  --accent-cyan:   #1C77C3;
-  --accent-glow:   rgba(28, 119, 195, 0.25);
-  --accent-tint:   rgba(28, 119, 195, 0.10);
+  --accent:        #42D4F9;
+  --accent-hover:  #26C6EF;
+  --accent-deep:   #0FA3CC;
+  --accent-vivid:  #0A7898;   /* cyan dark enough to read on white (5:1) */
+  --accent-cyan:   #0A7898;
+  --accent-glow:   rgba(66, 212, 249, 0.30);
+  --accent-tint:   rgba(66, 212, 249, 0.14);
+  --accent-line:   rgba(15, 163, 204, 0.35);
+  --on-accent:     #062530;
 
   --emerald:       #059669;
   --emerald-deep:  #047857;
   --emerald-glow:  rgba(5, 150, 105, 0.20);
 
-  --purple:        #1C77C3;
-  --purple-deep:   #155CA0;
-  --purple-glow:   rgba(28, 119, 195, 0.20);
+  --purple:        #0A7898;
+  --purple-deep:   #0FA3CC;
+  --purple-glow:   rgba(66, 212, 249, 0.20);
 
   --present:      #059669;
   --present-dim:  rgba(5, 150, 105, 0.12);
@@ -129,9 +135,9 @@
   --input-border:    #CBD5E1;
   --pill-bg:         #F1F5F9;
   --pill-border:     #DDE4ED;
-  --tip-bg:          #EAF3FB;
-  --tip-border:      #C5DEF2;
-  --tip-color:       #155CA0;
+  --tip-bg:          #EAFAFE;
+  --tip-border:      #BDEEFB;
+  --tip-color:       #0A6F8E;
   --select-opt-bg:   #FFFFFF;
   --video-idle-bg:   #F1F5F9;
   --overlay-bg:      rgba(15, 23, 42, 0.55);
@@ -233,7 +239,6 @@ button {
 .top-bar button,
 .top-bar input,
 .top-bar select,
-.top-nav-arrows,
 .theme-toggle-btn,
 .window-controls {
   --wails-draggable: no-drag;
@@ -245,7 +250,9 @@ button {
   gap: 12px;
 }
 
-/* Clean standalone "P" Brand Logo (no outline, no background box) */
+/* Standalone brand mark (no outline, no background box). The box spans the
+   sidebar's width (64px less its 1px right border) and cancels the top bar's
+   left padding, so the mark sits on the same centre line as the sidebar icons. */
 .top-brand-emblem {
   display: flex;
   align-items: center;
@@ -255,50 +262,23 @@ button {
   box-shadow: none;
   flex-shrink: 0;
   user-select: none;
-  padding: 0 4px 0 2px;
+  width: 63px;
+  margin-left: -16px;
+  margin-right: -4px;
+  padding: 0;
 }
 
-.brand-p-logo {
-  font-family: var(--display);
-  font-size: 22px;
-  font-weight: 900;
-  line-height: 1;
-  color: var(--accent);
-  letter-spacing: -0.03em;
-  display: inline-block;
+/* Presentia mark: cyan in light mode, white in dark (see TopBar). Size is set
+   inline so it matches the iridescent mark exactly — Tailwind's preflight
+   (img { height: auto }) would otherwise override the height attribute. */
+.brand-mark {
+  display: block;
+  object-fit: fill;
+  max-width: none;
   transition: transform 0.15s ease;
 }
-.brand-p-logo:hover {
+.brand-mark:hover {
   transform: scale(1.08);
-}
-
-.top-nav-arrows {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  background: var(--pill-bg);
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-}
-
-.top-arrow-btn {
-  width: 26px;
-  height: 26px;
-  border-radius: 5px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  transition: all 0.15s ease;
-}
-.top-arrow-btn:hover:not(:disabled) {
-  background: var(--card-row-hover);
-  color: var(--ink-heading);
-}
-.top-arrow-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
 }
 
 .top-app-title {
@@ -348,7 +328,7 @@ button {
 }
 .engine-pill.ready {
   color: var(--accent-vivid);
-  border-color: rgba(28, 119, 195, 0.30);
+  border-color: var(--accent-line);
   background: var(--accent-tint);
 }
 .engine-dot {
@@ -375,9 +355,13 @@ button {
   cursor: pointer;
   transition: all 0.18s ease;
 }
-.theme-toggle-btn:hover {
+.theme-toggle-btn:hover:not(:disabled) {
   background: var(--card-row-hover);
   border-color: var(--accent);
+}
+.theme-toggle-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* Wider Integrated Window Controls */
@@ -456,10 +440,10 @@ button {
   color: var(--ink-heading);
 }
 
-/* Active sidebar button in Presentia Sapphire Blue */
+/* Active sidebar button in Presentia Cyan */
 .sidebar-icon-btn.active {
   background: var(--accent);
-  color: #FFFFFF;
+  color: var(--on-accent);
 }
 
 .sidebar-bottom-stack {
@@ -472,8 +456,12 @@ button {
 /* ── Main Content Viewport ────────────────────────────────────────── */
 .main-viewport {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Layout below responds to the page's own width, not the window's. */
+  container-type: inline-size;
+  container-name: page;
   padding: 24px 28px;
   display: flex;
   flex-direction: column;
@@ -492,18 +480,21 @@ button {
 
 .hero-top-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 20px;
+  gap: 14px 20px;
 }
 
 .hero-title-group {
   display: flex;
   flex-direction: column;
+  flex: 1 1 240px;
+  min-width: 0;
 }
 
 .hero-title {
-  font-size: 34px;
+  font-size: clamp(24px, 3.4cqi, 34px);
   font-family: var(--display);
   font-weight: 800;
   letter-spacing: -0.03em;
@@ -520,14 +511,21 @@ button {
 
 .hero-action-cluster {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .hero-status-pill {
   display: flex;
   align-items: center;
   gap: 8px;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
   padding: 9px 16px;
   border-radius: var(--radius-pill);
   background: var(--pill-bg);
@@ -537,7 +535,7 @@ button {
   font-weight: 600;
 }
 
-/* Big "Launch" Hero Action Button in Presentia Blue */
+/* Big "Launch" Hero Action Button in Presentia Cyan */
 .btn-hero-launch {
   display: inline-flex;
   align-items: center;
@@ -548,10 +546,10 @@ button {
   font-size: 14px;
   font-weight: 800;
   font-family: var(--display);
-  color: #FFFFFF;
+  color: var(--on-accent);
   letter-spacing: 0.02em;
   background: var(--accent);
-  border: 1px solid var(--accent-deep);
+  border: 1px solid transparent; /* no stroke — flat fill only */
   cursor: pointer;
   transition: all 0.18s ease;
   white-space: nowrap;
@@ -572,7 +570,8 @@ button {
 
 .btn-hero-danger {
   background: var(--danger);
-  border-color: var(--danger);
+  border-color: transparent;
+  color: #FFFFFF;
 }
 .btn-hero-danger:hover:not(:disabled) {
   background: var(--danger-hover);
@@ -584,7 +583,7 @@ button {
   align-items: center;
   gap: 10px;
   padding: 10px 18px;
-  border-radius: var(--radius-pill);
+  border-radius: 18px; /* stays tidy when the tip wraps to two lines */
   background: var(--tip-bg);
   border: 1px solid var(--tip-border);
   font-size: 13px;
@@ -597,13 +596,15 @@ button {
    ══════════════════════════════════════════════════════════════════ */
 .cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  /* min() keeps one column from overflowing when the page is very narrow. */
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   gap: 18px;
   flex: 1;
 }
 
 .launcher-card {
   position: relative;
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
@@ -615,19 +616,33 @@ button {
   transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
-/* Card Header */
+/* Card Header — one fixed-height row in every card, so titles, pills and
+   buttons line up across cards whatever each header contains. */
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-height: 32px;
   padding-bottom: 4px;
+}
+.card-header > :last-child:not(.card-header-left) {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.card-header .btn-icon {
+  width: 28px;
+  height: 28px;
 }
 
 .card-header-left {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .card-icon-badge {
@@ -656,13 +671,30 @@ button {
   font-family: var(--display);
   font-size: 15px;
   font-weight: 700;
+  line-height: 1.3;
   color: var(--ink-heading);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* Every count/status pill is the same 24px chip ("Idle", "2", "Step 1"). */
 .card-count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 9px;
+  font-family: var(--body);
   font-size: 11px;
   font-weight: 700;
-  padding: 2px 8px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   border-radius: var(--radius-pill);
   background: var(--pill-bg);
   color: var(--muted);
@@ -776,9 +808,9 @@ select.input option {
   font-size: 13px;
   font-weight: 700;
   font-family: var(--body);
-  color: #FFFFFF;
+  color: var(--on-accent);
   background: var(--accent);
-  border: 1px solid var(--accent-deep);
+  border: 1px solid transparent; /* no stroke — flat fill only */
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
@@ -875,7 +907,7 @@ select.input option {
 .badge-present { background: var(--present-dim); color: var(--present); border: 1px solid rgba(16, 185, 129, 0.25); }
 .badge-missing { background: var(--missing-dim); color: var(--missing); border: 1px solid rgba(239, 68, 68, 0.25); }
 .badge-warn    { background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(245, 158, 11, 0.25); }
-.badge-emerald { background: var(--accent-tint); color: var(--accent-vivid); border: 1px solid rgba(28, 119, 195, 0.30); }
+.badge-emerald { background: var(--accent-tint); color: var(--accent-vivid); border: 1px solid var(--accent-line); }
 
 /* Step Rings for Registration */
 @keyframes step-pop {
@@ -916,9 +948,9 @@ select.input option {
   flex-shrink: 0;
 }
 .step-ring.active {
-  background: var(--accent-deep);
-  border-color: var(--accent-vivid);
-  color: #FFFFFF;
+  background: var(--accent);
+  border-color: var(--accent-deep);
+  color: var(--on-accent);
   animation: active-pulse 1.6s ease-in-out infinite;
 }
 .step-ring.done {
@@ -945,6 +977,7 @@ select.input option {
 }
 
 /* Data Table for Reports */
+.launcher-card:has(.data-table) { overflow-x: auto; } /* wide tables scroll inside their card */
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -1060,7 +1093,7 @@ select.input option {
   border-radius: 50%;
   background: var(--accent);
   border: 1.5px solid rgba(255,255,255,0.22);
-  color: #fff;
+  color: var(--on-accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1264,7 +1297,7 @@ select.input option {
   100% { opacity: 1; transform: translate(-50%, 0); }
 }
 @keyframes sel-flash {
-  0%, 100% { border-color: #1C77C3; }
+  0%, 100% { border-color: #42D4F9; }
   50%       { border-color: #fff; }
 }
 
@@ -1330,11 +1363,11 @@ select.input option {
 /* The dragged selection rectangle */
 .screen-picker-sel {
   position: absolute;
-  border: 2px solid #1C77C3;
-  background: rgba(28, 119, 195, 0.14);
+  border: 2px solid #42D4F9;
+  background: rgba(66, 212, 249, 0.14);
   border-radius: 3px;
   pointer-events: none;
-  box-shadow: 0 0 0 1px rgba(28, 119, 195, 0.30);
+  box-shadow: 0 0 0 1px rgba(66, 212, 249, 0.30);
 }
 
 /* Pixel-size label in the bottom-right corner of the rectangle */
@@ -1343,13 +1376,13 @@ select.input option {
   bottom: -26px;
   right: 0;
   background: var(--overlay-bg);
-  color: #1C77C3;
+  color: #42D4F9;
   font-size: 11px;
   font-weight: 700;
   font-family: monospace;
   padding: 2px 8px;
   border-radius: 6px;
-  border: 1px solid rgba(28, 119, 195, 0.35);
+  border: 1px solid rgba(66, 212, 249, 0.35);
   white-space: nowrap;
 }
 
@@ -1473,6 +1506,97 @@ select.input option {
   white-space: nowrap;
 }
 
+/* Settings tabs: Appearance / Performance / Software Updates */
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background: var(--pill-bg);
+  border: 1px solid var(--pill-border);
+}
+.settings-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  position: relative;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.settings-tab:hover:not(.active) {
+  color: var(--ink-heading);
+  background: var(--card-row-hover);
+}
+.settings-tab.active {
+  background: var(--surface);
+  color: var(--ink-heading);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.settings-tab-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  vertical-align: 1px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.hero-pill-text {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Settings → Performance: device status box and the device picker */
+.settings-info {
+  display: flex;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: var(--radius-md);
+  background: var(--tip-bg);
+  border: 1px solid var(--tip-border);
+  color: var(--tip-color);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.settings-info-title {
+  font-weight: 700;
+  color: var(--ink-heading);
+  margin-bottom: 2px;
+}
+.settings-info-note {
+  margin-top: 4px;
+  color: var(--muted);
+}
+.settings-select {
+  width: auto;
+  min-width: 0;
+  max-width: 230px;
+  flex-shrink: 1;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.settings-select option {
+  background: var(--select-opt-bg);
+  color: var(--ink);
+}
+.toggle-switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+@container page (max-width: 520px) {
+  .settings-row { flex-wrap: wrap; }
+  .settings-select { max-width: 100%; width: 100%; }
+}
+
 .settings-msg {
   font-size: 12.5px;
   color: var(--muted);
@@ -1506,4 +1630,405 @@ select.input option {
   background: var(--missing);
   border: 2px solid var(--sidebar-bg);
   pointer-events: none;
+}
+
+/* Pressed state for icon toggles (e.g. picture-in-picture). */
+.btn-icon.btn-icon-active {
+  color: var(--accent-vivid);
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   PICTURE-IN-PICTURE
+   Floating panel that keeps a live feed visible while the page scrolls.
+   Opens bottom-right; PipWindow sets right/bottom as it is dragged.
+   ══════════════════════════════════════════════════════════════════ */
+@keyframes pip-in {
+  0%   { opacity: 0; transform: translateY(12px) scale(0.96); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.pip-window {
+  position: fixed;
+  z-index: 250; /* above page content, below the settings scrim */
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-hi);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.40);
+  animation: pip-in 0.2s ease-out both;
+}
+
+.pip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.pip-header:active { cursor: grabbing; }
+
+.pip-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--display);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-heading);
+}
+
+/* Six-dot drag grip */
+.pip-grip {
+  width: 8px;
+  height: 12px;
+  flex-shrink: 0;
+  background-image: radial-gradient(circle, var(--muted-lo) 1.2px, transparent 1.4px);
+  background-size: 4px 4px;
+}
+
+.pip-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.pip-btn:hover {
+  background: var(--card-row-hover);
+  color: var(--ink-heading);
+}
+
+.pip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.pip-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  background: var(--card-row-bg);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.pip-status-count {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--accent-vivid);
+  font-variant-numeric: tabular-nums;
+}
+.pip-status-msg {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pip-placeholder {
+  min-height: 220px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SETTINGS — EXPERIMENTAL TOGGLES
+   ══════════════════════════════════════════════════════════════════ */
+.settings-row-lead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-logo-preview {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: #17141F; /* the mark is designed to glow on a dark field */
+  border: 1px solid var(--glass-border);
+}
+.settings-logo-preview .presentia-logo {
+  filter: drop-shadow(0 0 4px rgba(239, 238, 198, 0.45));
+}
+
+.toggle-switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: var(--pill-bg);
+  border: 1px solid var(--pill-border);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.toggle-switch:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.2s ease;
+}
+.toggle-switch.on {
+  background: var(--accent);
+  border-color: var(--accent-deep);
+}
+.toggle-switch.on .toggle-knob {
+  transform: translateX(18px);
+  background: #FFFFFF;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   IRIDESCENT DESIGN (experimental)
+   Applied via <html data-style="iridescent">; dark mode only.
+   Violet-neutral surfaces, with the logo's pastel spectrum on the
+   accent-bearing components. The native bubble's dial mirrors these
+   in bubble_dial_win.go (fillIri / labelColours).
+   ══════════════════════════════════════════════════════════════════ */
+:root {
+  --iri-gradient: linear-gradient(110deg, #97DEF0 0%, #EFEEC6 25%, #C888F9 50%, #CBB9F6 75%, #E5D5ED 100%);
+  --on-iri: #1B1030;
+}
+
+/* Dark only — App.tsx forces data-theme="dark" while the style is on. */
+:root[data-style="iridescent"] {
+  --app-bg:       #100E17;
+  --surface:      #18151F;
+  --surface-hi:   #1E1A28;
+  --ink:          #ECE8F4;
+  --ink-heading:  #FFFFFF;
+  --muted:        #A39CB5;
+  --muted-lo:     #665F7A;
+
+  --accent:        #C888F9;
+  --accent-hover:  #D3A0FA;
+  --accent-deep:   #A66BE6;
+  --accent-vivid:  #D6A8FB;
+  --accent-cyan:   #97DEF0;
+  --accent-glow:   rgba(200, 136, 249, 0.35);
+  --accent-tint:   rgba(200, 136, 249, 0.14);
+  --accent-line:   rgba(200, 136, 249, 0.30);
+  --on-accent:     #1B1030;
+  --purple:        #D6A8FB;
+  --purple-deep:   #A66BE6;
+  --purple-glow:   rgba(200, 136, 249, 0.25);
+
+  --glass-border:    #2A2536;
+  --topbar-bg:       #141119;
+  --sidebar-bg:      #141119;
+  --border-subtle:   #2A2536;
+  --card-row-bg:     #1D1926;
+  --card-row-border: #2A2536;
+  --card-row-hover:  #26212F;
+  --input-bg:        #14111B;
+  --input-border:    #332D42;
+  --pill-bg:         #1D1926;
+  --pill-border:     #332D42;
+  --tip-bg:          #1B1728;
+  --tip-border:      #3A3050;
+  --tip-color:       #D9C6F7;
+  --select-opt-bg:   #18151F;
+  --video-idle-bg:   #14111B;
+  --overlay-bg:      rgba(8, 6, 14, 0.88);
+}
+
+/* ── Brand mark ── */
+.brand-iri-logo {
+  display: block;
+  filter: drop-shadow(0 0 5px rgba(200, 136, 249, 0.50));
+  transition: transform 0.15s ease;
+}
+.brand-iri-logo:hover { transform: scale(1.08); }
+
+/* ── Spectrum-filled controls ──
+   Pastel fills take dark text; the gradient drifts on hover. */
+[data-style="iridescent"] .btn-primary:not(:disabled),
+[data-style="iridescent"] .btn-hero-launch:not(.btn-hero-danger):not(:disabled),
+[data-style="iridescent"] .sidebar-icon-btn.active,
+[data-style="iridescent"] .step-ring.active,
+[data-style="iridescent"] .toggle-switch.on,
+[data-style="iridescent"] .monitor-bubble:not(.bubble-active) {
+  background: var(--iri-gradient);
+  background-size: 180% 100%;
+  background-position: 0% 50%;
+  color: var(--on-iri);
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 0 1px rgba(200, 136, 249, 0.25), 0 4px 18px var(--accent-glow);
+  transition: background-position 0.45s ease, box-shadow 0.2s ease, transform 0.18s ease;
+}
+[data-style="iridescent"] .btn-primary:hover:not(:disabled),
+[data-style="iridescent"] .btn-hero-launch:not(.btn-hero-danger):hover:not(:disabled),
+[data-style="iridescent"] .monitor-bubble:not(.bubble-active):hover {
+  background: var(--iri-gradient);
+  background-size: 180% 100%;
+  background-position: 100% 50%;
+  box-shadow: 0 0 0 1px rgba(200, 136, 249, 0.40), 0 6px 24px var(--accent-glow);
+}
+[data-style="iridescent"] .btn-primary:not(:disabled),
+[data-style="iridescent"] .btn-hero-launch:not(.btn-hero-danger):not(:disabled) {
+  border-color: transparent;
+}
+[data-style="iridescent"] .btn-hero-launch:not(.btn-hero-danger):active:not(:disabled) {
+  filter: brightness(0.95);
+}
+[data-style="iridescent"] .step-ring.active {
+  animation: none;
+  border-color: #FFFFFF;
+}
+[data-style="iridescent"] .toggle-switch.on .toggle-knob {
+  background: #FFFFFF;
+  box-shadow: 0 1px 3px rgba(27, 16, 48, 0.35);
+}
+[data-style="iridescent"] .progress-fill {
+  background: var(--iri-gradient);
+}
+
+/* ── Hairline spectrum across the top of cards and floating panels ── */
+[data-style="iridescent"] .launcher-card::before,
+[data-style="iridescent"] .settings-panel::before,
+[data-style="iridescent"] .pip-window::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 14px;
+  right: 14px;
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--iri-gradient);
+  opacity: 0.85;
+  pointer-events: none;
+}
+[data-style="iridescent"] .settings-panel { position: relative; }
+/* The panel scrolls, which would clip a hairline sitting on its border. */
+[data-style="iridescent"] .settings-panel::before { top: 0; }
+
+/* ── Hero title in spectrum ── */
+[data-style="iridescent"] .hero-title {
+  background: linear-gradient(100deg, #FFFFFF 0%, #EFEEC6 35%, #D6A8FB 70%, #97DEF0 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ── Tinted chrome that had the blue baked in ── */
+[data-style="iridescent"] .engine-pill.ready,
+[data-style="iridescent"] .badge-emerald,
+[data-style="iridescent"] .bubble-menu-badge {
+  border-color: rgba(200, 136, 249, 0.35);
+}
+[data-style="iridescent"] .screen-picker-sel {
+  border-color: #C888F9;
+  background: rgba(200, 136, 249, 0.14);
+  box-shadow: 0 0 0 1px rgba(200, 136, 249, 0.30), 0 0 24px rgba(200, 136, 249, 0.25);
+}
+[data-style="iridescent"] .screen-picker-sel-label {
+  color: #D6A8FB;
+  border-color: rgba(200, 136, 249, 0.40);
+}
+[data-style="iridescent"] ::-webkit-scrollbar-thumb:hover {
+  background: #C888F9;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   RESPONSIVE
+   Page content reacts to its own width (container "page" on
+   .main-viewport); the top bar reacts to the window width.
+   ══════════════════════════════════════════════════════════════════ */
+.hero-status-pill select {
+  min-width: 0;
+  max-width: 260px;
+  text-overflow: ellipsis;
+}
+
+/* Title and actions no longer fit side by side: stack them, actions
+   left-aligned under the title. */
+/* Reports: four metric chips, then a wide table card beside the event log. */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.cards-grid-wide { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+
+/* Card titles shrink a little before they would truncate. */
+.cards-grid > .launcher-card,
+.stats-grid > .launcher-card {
+  container-type: inline-size;
+  container-name: card;
+}
+@container card (max-width: 360px) {
+  .card-title-text { font-size: 14px; }
+  .card-header-left { gap: 8px; }
+  .card-icon-badge { width: 28px; height: 28px; }
+}
+
+@container page (max-width: 980px) {
+  .cards-grid-wide { grid-template-columns: minmax(0, 1fr); }
+}
+@container page (max-width: 760px) {
+  .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+}
+
+@container page (max-width: 860px) {
+  .hero-top-row { flex-direction: column; align-items: stretch; }
+  .hero-title-group { flex-basis: auto; }
+  .hero-action-cluster { justify-content: flex-start; }
+}
+
+@container page (max-width: 640px) {
+  .hero-banner { gap: 10px; }
+  .hero-subtitle { font-size: 13px; }
+  .hero-action-cluster { gap: 8px; }
+  .btn-hero-launch { padding: 9px 18px; font-size: 13px; }
+  .hero-status-pill { padding: 7px 12px; font-size: 12px; }
+  .btn-ghost { padding: 8px 12px; }
+  .hero-tip-banner { padding: 9px 14px; font-size: 12px; }
+  .cards-grid { gap: 12px; }
+  .launcher-card { padding: 14px; gap: 12px; }
+}
+
+/* Very narrow (compact pinned panel): buttons share the row evenly. */
+@container page (max-width: 460px) {
+  .hero-action-cluster > * { flex: 1 1 auto; justify-content: center; }
+  .hero-tip-banner { display: none; }
+  .card-title-text { font-size: 14px; }
+}
+
+@media (max-width: 900px) {
+  .main-viewport { padding: 18px 18px; }
+  .top-page-tag { display: none; }
+}
+@media (max-width: 720px) {
+  .main-viewport { padding: 14px 12px; gap: 14px; }
+  .top-version-tag { display: none; }
+  .engine-pill { padding: 4px 8px; }
+  .engine-pill span:not(.engine-dot) { display: none; }  /* keep the status dot */
+  .theme-toggle-btn span { display: none; }              /* icon only */
+  .win-btn { width: 40px; }
+}
+@media (max-width: 520px) {
+  .top-bar { padding-right: 8px; }
+  .top-app-title { display: none; }
+  .win-btn { width: 34px; }
 }

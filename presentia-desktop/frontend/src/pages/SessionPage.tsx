@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import VideoCanvas from '../components/VideoCanvas'
+import { useFrameFeed, type Frame } from '../components/frameFeed'
 import AlertList, { makeAlert } from '../components/AlertList'
 import StatusBanner from '../components/StatusBanner'
+import CameraViewControls, { useCameraView } from '../components/CameraViewControls'
 
 const API = 'http://127.0.0.1:7788'
 const WS  = 'ws://127.0.0.1:7788'
@@ -31,7 +33,14 @@ export default function SessionPage() {
   const [selectedIdx, setSelectedIdx]       = useState(0)
   const [phase, setPhase]                   = useState<Phase>('idle')
   const [sessionId, setSessionId]           = useState<number | null>(null)
-  const [frame, setFrame]                   = useState<string | null>(null)
+  // Live frames go straight from the socket to the canvas (see frameFeed);
+  // React only tracks whether there is a picture at all.
+  const feed = useFrameFeed()
+  const [hasFrame, setHasFrame]         = useState(false)
+  const setFrame = useCallback((f: Frame) => {
+    feed.push(f)
+    setHasFrame(f !== null)
+  }, [feed])
   const [alerts, setAlerts]                 = useState<AlertItem[]>([])
   type BannerLevel = 'info' | 'ok' | 'warn' | 'error'
   const [banner, setBanner]                 = useState<{ text: string; level: BannerLevel }>({
@@ -40,6 +49,16 @@ export default function SessionPage() {
   })
 
   const wsRef = useRef<WebSocket | null>(null)
+  // Mirror / invert the webcam; applied by the sidecar to the frames themselves.
+  const [cameraView, setCameraView]         = useCameraView()
+  const cameraViewRef = useRef(cameraView)
+  useEffect(() => {
+    cameraViewRef.current = cameraView
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ action: 'set_view', ...cameraView }))
+    }
+  }, [cameraView])
   const phaseStartRef = useRef<number>(0)
   const recCountRef = useRef(0)
   const activeStudentRef = useRef<Student | null>(null)
@@ -151,9 +170,11 @@ export default function SessionPage() {
 
   const openCameraWS = () => {
     const ws = new WebSocket(`${WS}/ws/camera`)
+    ws.binaryType = 'arraybuffer' // preview frames arrive as raw JPEG bytes
     wsRef.current = ws
     ws.onmessage = handleMessage
     ws.onerror = () => setBannerState('Camera error', 'error')
+    sendWs({ action: 'set_view', ...cameraViewRef.current })
   }
 
   // Never leave the webcam streaming after the user navigates away.
@@ -184,8 +205,11 @@ export default function SessionPage() {
 
   const handleMessage = useCallback(
     (ev: MessageEvent) => {
+      if (typeof ev.data !== 'string') {
+        setFrame(ev.data as ArrayBuffer)
+        return
+      }
       const data = JSON.parse(ev.data)
-      if (data.jpeg) setFrame(data.jpeg)
 
       if (data.type === 'error') {
         setBannerState(data.message || 'Sidecar error', 'error')
@@ -442,15 +466,18 @@ export default function SessionPage() {
               </div>
               <span className="card-title-text">Verification Stream</span>
             </div>
-            <span className="card-count-pill">
-              {phase === 'monitoring' ? 'Monitoring' : phase === 'liveness' ? 'Liveness Check' : 'Camera Feed'}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="card-count-pill">
+                {phase === 'monitoring' ? 'Monitoring' : phase === 'liveness' ? 'Liveness Check' : 'Camera Feed'}
+              </span>
+              <CameraViewControls view={cameraView} onChange={setCameraView} />
+            </div>
           </div>
 
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 300, gap: 10 }}>
             <VideoCanvas
-              jpegBase64={frame}
-              idle={phase === 'idle' || !frame}
+              feed={feed}
+              idle={phase === 'idle' || !hasFrame}
               idleText={phase === 'idle' ? 'Click Launch Session to open camera' : 'Waiting for video stream...'}
               className="flex-1"
             />

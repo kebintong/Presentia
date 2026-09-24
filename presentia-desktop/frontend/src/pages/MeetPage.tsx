@@ -8,8 +8,11 @@ import {
   OpenBubble, CloseBubble,
 } from '../../wailsjs/go/main/App'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+import { useFrameFeed, type Frame } from '../components/frameFeed'
 
 const API = 'http://127.0.0.1:7788'
+// Bindings added after the generated wailsjs files; called defensively.
+const goApp = () => (window as any)['go']?.['main']?.['App']
 const WS  = 'ws://127.0.0.1:7788'
 
 interface RosterStudent {
@@ -45,6 +48,17 @@ interface WindowInfo {
   top: number
   width: number
   height: number
+  hwnd?: number
+}
+
+/** What to monitor: a fixed screen area, or a window (followed as it moves). */
+interface Region {
+  left: number
+  top: number
+  width: number
+  height: number
+  hwnd?: number
+  title?: string
 }
 
 interface ScreenShot {
@@ -60,8 +74,15 @@ export default function MeetPage() {
   const [missingAfter, setMissingAfter] = useState(5)
   const [monitoring, setMonitoring]     = useState(false)
   const [sessionId, setSessionId]       = useState<number | null>(null)
-  const [frame, setFrame]               = useState<string | null>(null)
-  const [region, setRegion]             = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  // Live frames go straight from the socket to the canvas (see frameFeed);
+  // React only tracks whether there is a picture at all.
+  const feed = useFrameFeed()
+  const [hasFrame, setHasFrame]         = useState(false)
+  const setFrame = useCallback((f: Frame) => {
+    feed.push(f)
+    setHasFrame(f !== null)
+  }, [feed])
+  const [region, setRegion]             = useState<Region | null>(null)
   const [roster, setRoster]             = useState<RosterStudent[]>([])
   const [unknowns, setUnknowns]         = useState<UnknownFace[]>([])
   const [alerts, setAlerts]             = useState<AlertItem[]>([])
@@ -191,30 +212,55 @@ export default function MeetPage() {
     setShowWinPicker(true)
   }
 
-  const selectWindow = (w: WindowInfo) => {
-    setRegion({ left: w.left, top: w.top, width: w.width, height: w.height })
-    addAlert(`Window selected: "${w.title}"`, 'info')
+  // In bubble mode the app sits in the tray; it was brought out for the
+  // picker and goes back once the instructor has chosen (or cancelled).
+  const closeWinPicker = () => {
     setShowWinPicker(false)
+    goApp()?.['BubbleTaskDone']?.()
+  }
+
+  const selectWindow = (w: WindowInfo) => {
+    // The window handle lets the sidecar follow the window if it is moved
+    // or resized while monitoring.
+    setRegion({ left: w.left, top: w.top, width: w.width, height: w.height, hwnd: w.hwnd, title: w.title })
+    addAlert(`Window selected: "${w.title}" — it stays monitored when moved or behind other windows (not when minimised).`, 'info')
+    closeWinPicker()
   }
 
   // ── Monitoring ────────────────────────────────────────────────────
   const startMonitoringFn = useCallback(() => {
-    if (!region) { addAlert('Select a screen area or window first — use the bubble menu.', 'warn'); return }
+    if (!region) {
+      // Started from the bubble with the app in the tray: bring it out so
+      // the instructor actually sees why nothing happened.
+      goApp()?.['ShowMainWindow']?.()
+      addAlert('Select a screen area or window first — use the bubble menu.', 'warn')
+      return
+    }
     const ws = new WebSocket(`${WS}/ws/screen`)
+    ws.binaryType = 'arraybuffer' // preview frames arrive as raw JPEG bytes
     wsRef.current = ws
     ws.onopen = () => {
       const name = sessionName.trim() || `Meet ${new Date().toLocaleString()}`
       ws.send(JSON.stringify({ action: 'start', region, name, missing_after: missingAfter }))
     }
     ws.onmessage = (ev) => {
+      if (typeof ev.data !== 'string') {
+        setFrame(ev.data as ArrayBuffer)
+        return
+      }
       const data = JSON.parse(ev.data)
       if (data.type === 'started') {
         setSessionId(data.session_id); setMonitoring(true)
         addAlert(`Monitoring started: "${sessionName || 'Meet session'}"`, 'ok')
       } else if (data.type === 'frame') {
-        // The sidecar already draws name + score boxes on this frame; showing
-        // it is the only way the instructor can see what is being matched.
+        // Live preview (~24 fps). The sidecar draws the latest name + score
+        // boxes on it; showing it is how the instructor sees what is matched.
         if (data.jpeg) setFrame(data.jpeg)
+        // Older sidecars sent roster data with every frame.
+        if (data.roster) setRoster(data.roster)
+        if (data.unknowns) setUnknowns(data.unknowns.map((u: any, i: number) => ({ ...u, index: i })))
+      } else if (data.type === 'analysis') {
+        // Recognition results arrive separately, at the analysis rate.
         setRoster(data.roster || [])
         setUnknowns((data.unknowns || []).map((u: any, i: number) => ({ ...u, index: i })))
       } else if (data.type === 'alert') {
@@ -309,11 +355,13 @@ export default function MeetPage() {
           </div>
           <div className="hero-action-cluster">
             {region && (
-              <div className="hero-status-pill">
+              <div className="hero-status-pill" title={region.hwnd ? `Watching "${region.title}", even behind other windows` : 'Fixed screen area'}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>
                 </svg>
-                <span>{region.width}×{region.height}</span>
+                <span className="hero-pill-text">
+                  {region.hwnd && region.title ? region.title : `${region.width}×${region.height}`}
+                </span>
               </div>
             )}
             {monitoring && (
@@ -450,8 +498,8 @@ export default function MeetPage() {
             {/* Live view of the monitored area with recognition boxes */}
             {monitoring && (
               <VideoCanvas
-                jpegBase64={frame}
-                idle={!frame}
+                feed={feed}
+                idle={!hasFrame}
                 idleText="Waiting for the first captured frame…"
               />
             )}
@@ -495,7 +543,7 @@ export default function MeetPage() {
       {showWinPicker && (
         <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center',
           justifyContent: 'center', background: 'var(--overlay-bg)', zIndex: 200 }}>
-          <div className="launcher-card" style={{ width: 420, padding: 20, gap: 12 }}>
+          <div className="launcher-card" style={{ width: 420, maxWidth: 'calc(100vw - 32px)', padding: 20, gap: 12 }}>
             <div className="card-header" style={{ paddingBottom: 0 }}>
               <div className="card-header-left">
                 <div className="card-icon-badge">
@@ -505,7 +553,7 @@ export default function MeetPage() {
                 </div>
                 <span className="card-title-text">Select a Window to Monitor</span>
               </div>
-              <button className="btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setShowWinPicker(false)}>✕</button>
+              <button className="btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={closeWinPicker}>✕</button>
             </div>
             <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
               {openWindows.length === 0
@@ -564,7 +612,7 @@ export default function MeetPage() {
       {enrollDialog && (
         <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center',
           justifyContent: 'center', background: 'var(--overlay-bg)', zIndex: 200 }}>
-          <div className="launcher-card" style={{ width: 340, padding: 24, gap: 16 }}>
+          <div className="launcher-card" style={{ width: 340, maxWidth: 'calc(100vw - 32px)', padding: 24, gap: 16 }}>
             <h3 style={{ fontSize: 16, color: 'var(--ink-heading)' }}>Enroll Face from Meeting</h3>
             <img src={`data:image/jpeg;base64,${enrollDialog.unknown.crop_jpeg}`} alt="Face"
               style={{ width: '100%', height: 140, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--border-subtle)' }}/>

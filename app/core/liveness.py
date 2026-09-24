@@ -135,6 +135,8 @@ class LivenessChecker:
     def __init__(self, tracker: FaceMeshTracker, directional: bool = True) -> None:
         self._tracker = tracker
         self._directional = directional
+        # LEFT/RIGHT assume the mirrored selfie preview; see _yaw().
+        self.mirrored = True
         self.reset()
 
     def reset(self) -> None:
@@ -174,6 +176,11 @@ class LivenessChecker:
             self._hold_side = side if condition else None
         return self._hold >= HOLD_FRAMES
 
+    def _yaw(self, landmarks) -> float:
+        """Yaw in the mirrored (selfie) frame of reference."""
+        yaw = _yaw_ratio(landmarks)
+        return yaw if self.mirrored else 1.0 - yaw
+
     def process(self, frame_bgr: np.ndarray) -> dict:
         """Advance the challenge with one frame. Returns state for the UI."""
         landmarks = self._tracker.landmarks(frame_bgr)
@@ -198,26 +205,26 @@ class LivenessChecker:
                     self.stage = (self.STAGE_TURN_LEFT if self._directional
                                   else self.STAGE_TURN_ANY)
         elif self.stage == self.STAGE_TURN_LEFT:
-            if self._held(_yaw_ratio(landmarks) < YAW_LEFT):
+            if self._held(self._yaw(landmarks) < YAW_LEFT):
                 self._hold = 0
                 self.stage = self.STAGE_CENTER
         elif self.stage == self.STAGE_TURN_ANY:
-            yaw = _yaw_ratio(landmarks)
+            yaw = self._yaw(landmarks)
             side = "low" if yaw < YAW_LEFT else ("high" if yaw > YAW_RIGHT else None)
             if self._held(side is not None, side):
                 self._first_side = self._hold_side
                 self._hold = 0
                 self.stage = self.STAGE_CENTER
         elif self.stage == self.STAGE_CENTER:
-            if YAW_CENTER_LO < _yaw_ratio(landmarks) < YAW_CENTER_HI:
+            if YAW_CENTER_LO < self._yaw(landmarks) < YAW_CENTER_HI:
                 self._hold = 0
                 self.stage = (self.STAGE_TURN_RIGHT if self._directional
                               else self.STAGE_TURN_OPPOSITE)
         elif self.stage == self.STAGE_TURN_RIGHT:
-            if self._held(_yaw_ratio(landmarks) > YAW_RIGHT):
+            if self._held(self._yaw(landmarks) > YAW_RIGHT):
                 self.stage = self.STAGE_PASSED
         elif self.stage == self.STAGE_TURN_OPPOSITE:
-            yaw = _yaw_ratio(landmarks)
+            yaw = self._yaw(landmarks)
             opposite = (yaw > YAW_RIGHT) if self._first_side == "low" else (yaw < YAW_LEFT)
             if self._held(opposite):
                 self.stage = self.STAGE_PASSED

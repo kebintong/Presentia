@@ -8,22 +8,22 @@ import (
 )
 
 var (
-	user32                      = syscall.NewLazyDLL("user32.dll")
-	kernel32                    = syscall.NewLazyDLL("kernel32.dll")
-	procEnumWindows             = user32.NewProc("EnumWindows")
-	procGetWindowTextW          = user32.NewProc("GetWindowTextW")
-	procGetWindowRect           = user32.NewProc("GetWindowRect")
-	procIsWindowVisible         = user32.NewProc("IsWindowVisible")
-	procGetWindowLongW          = user32.NewProc("GetWindowLongW")
+	user32                       = syscall.NewLazyDLL("user32.dll")
+	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
+	procEnumWindows              = user32.NewProc("EnumWindows")
+	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
+	procGetWindowRect            = user32.NewProc("GetWindowRect")
+	procIsWindowVisible          = user32.NewProc("IsWindowVisible")
+	procGetWindowLongW           = user32.NewProc("GetWindowLongW")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
-	procGetCurrentProcessId     = kernel32.NewProc("GetCurrentProcessId")
+	procGetCurrentProcessId      = kernel32.NewProc("GetCurrentProcessId")
 )
 
 type rect struct{ Left, Top, Right, Bottom int32 }
 
 const (
 	wsVisible = 0x10000000
-	wsCaption  = 0x00C00000 // real titled window
+	wsCaption = 0x00C00000 // real titled window
 )
 
 func enumWindows() []WindowInfo {
@@ -77,6 +77,7 @@ func enumWindows() []WindowInfo {
 			Top:    int(r.Top),
 			Width:  w,
 			Height: h,
+			Hwnd:   uint64(hwnd),
 		})
 		return 1 // continue enumeration
 	})

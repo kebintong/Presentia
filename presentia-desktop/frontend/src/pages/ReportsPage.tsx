@@ -233,7 +233,7 @@ export default function ReportsPage() {
       </section>
 
       {/* ── Metric Summary Chips ─────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+      <div className="stats-grid">
         <div className="launcher-card" style={{ padding: '14px 18px', gap: 6 }}>
           <span className="field-label" style={{ margin: 0 }}>Total Registered</span>
           <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--ink-heading)', fontFamily: 'var(--display)' }}>
@@ -264,7 +264,7 @@ export default function ReportsPage() {
       </div>
 
       {/* ── 2 Modular Cards: Records Table & Event Log ───────────────── */}
-      <section className="cards-grid" style={{ gridTemplateColumns: '2fr 1fr' }}>
+      <section className="cards-grid cards-grid-wide">
         {/* Main Card: Attendance Records Table */}
         <div className="launcher-card" style={{ minHeight: 320 }}>
           <div className="card-header">

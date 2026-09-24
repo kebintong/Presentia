@@ -6,3 +6,10 @@ package main
 func OpenFloatingBubble(a *App)      {}
 func CloseFloatingBubble()           {}
 func setBubbleThemeNative(dark bool) {}
+func setBubbleStyleNative(iri bool)  {}
+
+func openPipNative(a *App, title string) bool            { return false }
+func closePipNative()                                    {}
+func pipFrameNative(b64 string)                          {}
+func pipStatusNative(badge, count, msg, idleText string) {}
+func bubbleTaskDone()                                    {}

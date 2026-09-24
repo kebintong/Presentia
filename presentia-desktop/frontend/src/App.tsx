@@ -25,18 +25,36 @@ export default function App() {
     return 'dark' // default dark mode
   })
 
+  // Experimental iridescent design. It is a dark-only look: while it is on
+  // the app is forced dark, and the user's own theme choice is kept so that
+  // turning it off puts them back where they were.
+  const [iridescent, setIridescent] = useState<boolean>(
+    () => localStorage.getItem('presentia-iridescent') === '1'
+  )
+  const effectiveTheme: Theme = iridescent ? 'dark' : theme
+
   // Sync theme with DOM and localStorage
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
+    document.documentElement.setAttribute('data-theme', effectiveTheme)
     localStorage.setItem('presentia-theme', theme)
-    // The floating bubble is a native Win32 window painted with GDI, so it
-    // cannot read the stylesheet — push the theme down to it explicitly.
-    goApp()?.['SetBubbleTheme']?.(theme === 'dark')
-  }, [theme])
+    // The floating bubble is a native Win32 window, so it cannot read the
+    // stylesheet — push the theme down to it explicitly.
+    goApp()?.['SetBubbleTheme']?.(effectiveTheme === 'dark')
+  }, [theme, effectiveTheme])
 
   const toggleTheme = () => {
+    if (iridescent) return // locked to dark
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
   }
+
+  useEffect(() => {
+    const root = document.documentElement
+    if (iridescent) root.setAttribute('data-style', 'iridescent')
+    else root.removeAttribute('data-style')
+    localStorage.setItem('presentia-iridescent', iridescent ? '1' : '0')
+    // Swaps the native bubble between the cyan mark and the spectrum mark.
+    goApp()?.['SetBubbleStyle']?.(iridescent)
+  }, [iridescent])
 
   // Poll engine status until ready
   useEffect(() => {
@@ -116,9 +134,10 @@ export default function App() {
           activePage={page}
           onNavigate={setPage}
           engineReady={engineReady}
-          theme={theme}
+          theme={effectiveTheme}
           onToggleTheme={toggleTheme}
           version={version}
+          iridescent={iridescent}
         />
 
         {/* App Body: Slim icon sidebar + Main viewport */}
@@ -141,8 +160,10 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         update={update}
         version={version}
-        theme={theme}
+        theme={effectiveTheme}
         onToggleTheme={toggleTheme}
+        iridescent={iridescent}
+        onToggleIridescent={() => setIridescent((v) => !v)}
         onRecheck={recheckUpdate}
       />
     </>

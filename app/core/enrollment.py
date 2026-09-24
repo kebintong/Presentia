@@ -51,6 +51,10 @@ class GuidedEnrollment:
                 ("center", "Look straight at the camera again"),
                 ("blink", "Ask them to blink once"),
             ]
+        # Stage names assume the selfie (mirrored) preview. When the viewer
+        # turns mirroring off, yaw is flipped back into that frame of
+        # reference so "turn LEFT" still means the person's own left.
+        self.mirrored = True
         self.samples: list[np.ndarray] = []
         self._stage_idx = 0
         self._hold = 0
@@ -83,6 +87,8 @@ class GuidedEnrollment:
 
         pose = self._stages[self._stage_idx][0]
         yaw = _yaw_ratio(landmarks)
+        if not self.mirrored:
+            yaw = 1.0 - yaw
         satisfied, side = False, None
 
         if pose == "center":

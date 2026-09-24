@@ -116,6 +116,41 @@ class CameraThread:
         return None
 
 
+def open_fast_capture(index: int = 0, width: int = 640, height: int = 480, fps: int = 30):
+    """Open a webcam tuned for a smooth live preview.
+
+    Returns (capture, first_frame) or (None, None). On Windows DirectShow is
+    tried first with MJPG: it opens in well under a second and delivers a
+    full 30 fps at 640x480 on most webcams, where the default Media
+    Foundation backend can take seconds to open and often runs uncompressed
+    at a lower rate. The driver's frame buffer is kept to one frame so the
+    preview shows *now*, not a queue of old frames.
+    """
+    backends: list[int] = []
+    if sys.platform == "win32":
+        backends += [cv2.CAP_DSHOW, cv2.CAP_MSMF]
+    backends.append(cv2.CAP_ANY)
+    for api in backends:
+        cap = cv2.VideoCapture(index, api)
+        if not cap.isOpened():
+            cap.release()
+            continue
+        if api == getattr(cv2, "CAP_DSHOW", -1):
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        cap.set(cv2.CAP_PROP_FPS, fps)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            if frame.shape[1] > MAX_FRAME_WIDTH:
+                k = MAX_FRAME_WIDTH / frame.shape[1]
+                frame = cv2.resize(frame, (MAX_FRAME_WIDTH, int(frame.shape[0] * k)))
+            return cap, frame
+        cap.release()
+    return None, None
+
+
 def frame_brightness(frame: np.ndarray) -> float:
     """Mean grayscale brightness (0-255); near-zero means covered/blacked out."""
     return float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean())
