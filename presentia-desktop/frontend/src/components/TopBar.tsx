@@ -10,6 +10,8 @@ interface TopBarProps {
   /** Kept for callers; the top bar no longer has back/forward arrows. */
   onNavigate?: (page: Page) => void
   engineReady: boolean
+  /** Startup detail while the engine is not ready yet (e.g. download progress). */
+  engineMessage?: string
   theme: 'dark' | 'light'
   onToggleTheme: () => void
   /** Build version, shown beside the title. Empty outside the desktop shell. */
@@ -27,6 +29,7 @@ const MARK_W = Math.round(((MARK_H * 1325) / 2000) * MARK_WIDEN)
 export default function TopBar({
   activePage,
   engineReady,
+  engineMessage = '',
   theme,
   onToggleTheme,
   version,
@@ -93,7 +96,9 @@ export default function TopBar({
         {/* Engine status indicator pill */}
         <div className={`engine-pill ${engineReady ? 'ready' : 'loading'}`}>
           <span className="engine-dot" />
-          <span>{engineReady ? 'Engine Ready' : 'Starting Sidecar...'}</span>
+          <span title={engineMessage || undefined}>
+            {engineReady ? 'Engine Ready' : engineMessage || 'Starting engine…'}
+          </span>
         </div>
 
         {/* Theme Toggle Button (Dark / Light) */}

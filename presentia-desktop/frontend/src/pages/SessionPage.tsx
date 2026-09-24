@@ -223,6 +223,27 @@ export default function SessionPage() {
           setBannerState('Liveness check timed out. Press Join & Verify to retry.', 'error')
           return
         }
+        if (data.failed) {
+          // Randomised step not done in time, or the face looked like a
+          // photo / screen replay (Settings → Accessibility).
+          const student = pendingStudentRef.current
+          setPhase('waiting')
+          sendWs({ action: 'stop' })
+          addAlert(`Check-in stopped for ${student?.name ?? 'student'}: ${data.prompt}`, 'error')
+          if (sessionId && student && String(data.prompt).includes('photo or a screen')) {
+            fetch(`${API}/api/sessions/${sessionId}/log-event`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                student_id: student.id,
+                event_type: 'spoof_suspected',
+                message: `Check-in stopped: face looked like a photo or a screen (score ${data.spoof_score ?? '?'}).`,
+              }),
+            })
+          }
+          setBannerState(`${data.prompt} Press Join & Verify to retry.`, 'error')
+          return
+        }
         if (data.passed) {
           setPhase('recognize')
           recCountRef.current = 0
@@ -232,7 +253,10 @@ export default function SessionPage() {
             student_id: pendingStudentRef.current?.id,
           })
         } else {
-          setBannerState(`Liveness check: ${data.prompt}`, 'info')
+          setBannerState(
+            data.steps ? `Step ${data.step} of ${data.steps}: ${data.prompt}` : `Liveness check: ${data.prompt}`,
+            'info',
+          )
         }
       }
 

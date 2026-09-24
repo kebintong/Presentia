@@ -11,8 +11,19 @@ interface GpuDevice {
   usable: boolean   // this build can drive it
 }
 
+interface BenchResult { id: string; device: string; backend: string; ms?: number; error?: string }
+
 interface PerfInfo {
-  settings: { device: string; high_performance: boolean }
+  settings: { device: string; profile: string }
+  effective_profile: 'low' | 'balanced' | 'high'
+  profiles: Record<string, { label: string; summary: string }>
+  benchmark: {
+    results?: BenchResult[]
+    best?: string
+    best_ms?: number
+    recommended?: string
+    measured_at?: string
+  }
   devices: GpuDevice[]
   gpu_runtime: string | null
   status: {
@@ -21,11 +32,18 @@ interface PerfInfo {
     device?: string
     threads?: number
     fell_back?: boolean
-    error?: string | null
+    profile?: string
+    detectors?: { camera: string; meeting: string }
     message?: string
   }
   cpu_cores: number
-  threads: { balanced: number; high: number }
+  ram_gb: number
+}
+
+const DETECTOR_NAMES: Record<string, string> = {
+  yunet: 'YuNet (tiny)',
+  'scrfd_2.5g': 'SCRFD 2.5G (light)',
+  scrfd_10g: 'SCRFD 10G (full)',
 }
 
 function vram(mb: number) {
@@ -34,14 +52,15 @@ function vram(mb: number) {
 }
 
 /**
- * Settings → Performance: which device runs face recognition, and whether
- * to favour recognition speed over leaving resources for other programs.
- * The device list is whatever graphics adapters this computer reports.
+ * Settings → Performance: which device runs face recognition and which
+ * profile (Low / Balanced / High) the app uses. "Auto" follows a short
+ * hardware check that times detection on the CPU and every graphics card.
  */
 export default function PerformanceSettings() {
   const [info, setInfo] = useState<PerfInfo | null>(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [measuring, setMeasuring] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -56,15 +75,15 @@ export default function PerformanceSettings() {
 
   useEffect(() => { load() }, [load])
 
-  // While the models reload on the new device, keep the status line current.
-  const busy = info?.status.state === 'applying' || info?.status.state === 'loading'
+  // While the models reload, keep the status line current.
+  const busy = measuring || info?.status.state === 'applying' || info?.status.state === 'loading'
   useEffect(() => {
     if (!busy) return
     const t = setInterval(load, 1000)
     return () => clearInterval(t)
   }, [busy, load])
 
-  const save = async (patch: { device?: string; high_performance?: boolean }) => {
+  const save = async (patch: { device?: string; profile?: string }) => {
     setSaving(true)
     try {
       const res = await fetch(`${API}/api/perf`, {
@@ -82,14 +101,28 @@ export default function PerformanceSettings() {
     }
   }
 
+  const measure = async () => {
+    setMeasuring(true)
+    try {
+      const res = await fetch(`${API}/api/perf/benchmark`, { method: 'POST' })
+      if (res.ok) setInfo(await res.json())
+    } catch {
+      setError('The hardware check could not run.')
+    } finally {
+      setMeasuring(false)
+    }
+  }
+
   const st = info?.status
-  const usable = (info?.devices || []).filter((d) => d.usable)
-  const best = usable.length ? usable.reduce((a, b) => (b.vram_mb > a.vram_mb ? b : a)) : null
+  const bench = info?.benchmark
+  const rec = bench?.recommended
+  const profileLabel = (p?: string) => (p && info?.profiles[p]?.label) || p || ''
 
   let summary = 'Checking your hardware…'
-  if (st?.state === 'applying') summary = 'Applying — reloading the face models on the selected device…'
-  else if (st?.state === 'loading') summary = 'Loading the face models…'
-  else if (st?.state === 'error') summary = `Could not switch devices: ${st.message || 'unknown error'}`
+  if (measuring) summary = 'Measuring this computer…'
+  else if (st?.state === 'applying') summary = 'Applying — reloading the face models…'
+  else if (st?.state === 'loading') summary = st.message || 'Loading the face models…'
+  else if (st?.state === 'error') summary = `Could not apply the settings: ${st.message || 'unknown error'}`
   else if (st?.backend && st.backend !== 'CPU') summary = `Face recognition is running on your ${st.device} through ${st.backend}.`
   else if (st?.backend === 'CPU') summary = `Face recognition is running on the CPU (${st.threads} of ${info?.cpu_cores} cores).`
 
@@ -97,13 +130,13 @@ export default function PerformanceSettings() {
   if (st?.fell_back && st.backend === 'CPU' && info?.settings.device !== 'cpu') {
     note = 'The selected graphics card could not run the models, so the CPU is being used instead.'
   } else if (info && info.devices.length > 0 && !info.gpu_runtime) {
-    note = 'This build cannot use the graphics card yet (it needs the DirectML runtime), so the CPU is used.'
+    note = 'This build cannot use the graphics card (it needs the DirectML runtime), so the CPU is used.'
   }
+
+  const measured = (bench?.results || []).filter((r) => r.ms !== undefined)
 
   return (
     <div className="settings-section">
-      <span className="field-label">Performance</span>
-
       <div className="settings-info" role="status">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, marginTop: 1 }}>
           <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
@@ -111,15 +144,45 @@ export default function PerformanceSettings() {
         <div>
           <div className="settings-info-title">Processing device info</div>
           <div>{error || summary}</div>
+          {st?.state === 'ready' && info && (
+            <div className="settings-info-note">
+              Profile: {profileLabel(info.effective_profile)}
+              {st.detectors && ` · webcam: ${DETECTOR_NAMES[st.detectors.camera] || st.detectors.camera}`}
+              {st.detectors && ` · meetings: ${DETECTOR_NAMES[st.detectors.meeting] || st.detectors.meeting}`}
+            </div>
+          )}
           {note && <div className="settings-info-note">{note}</div>}
         </div>
       </div>
 
       <div className="settings-row">
         <div>
+          <div className="settings-row-title">Performance profile</div>
+          <div className="settings-row-sub">
+            {info
+              ? info.profiles[info.effective_profile]?.summary
+              : 'How much work face recognition does. Auto picks one for this computer.'}
+          </div>
+        </div>
+        <select
+          className="input settings-select"
+          value={info?.settings.profile ?? 'auto'}
+          disabled={!info || saving || busy}
+          onChange={(e) => save({ profile: e.target.value })}
+          aria-label="Performance profile"
+        >
+          <option value="auto">Auto{rec ? ` (${profileLabel(rec)})` : ''}</option>
+          {info && Object.entries(info.profiles).map(([k, v]) => (
+            <option key={k} value={k}>{v.label}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="settings-row">
+        <div>
           <div className="settings-row-title">Processing device</div>
           <div className="settings-row-sub">
-            Runs face detection and recognition. Auto picks the most capable graphics card on this computer.
+            Runs face detection and recognition. Auto uses whichever device measured fastest.
           </div>
         </div>
         <select
@@ -129,7 +192,7 @@ export default function PerformanceSettings() {
           onChange={(e) => save({ device: e.target.value })}
           aria-label="Processing device"
         >
-          <option value="auto">Auto{best ? ` (${best.name})` : ' (CPU)'}</option>
+          <option value="auto">Auto</option>
           {(info?.devices || []).map((d) => (
             <option key={d.id} value={d.id} disabled={!d.usable}>
               {d.name}{vram(d.vram_mb)}{d.usable ? '' : ' — not supported by this build'}
@@ -141,23 +204,17 @@ export default function PerformanceSettings() {
 
       <div className="settings-row">
         <div>
-          <div className="settings-row-title">High performance mode</div>
+          <div className="settings-row-title">Hardware check</div>
           <div className="settings-row-sub">
-            Recognition runs as often as it can
-            {info ? `, on up to ${info.threads.high} CPU threads instead of ${info.threads.balanced},` : ''}
-            {' '}at higher priority. Turn on for large classes; it may slow down other programs, including the meeting app.
+            {measured.length > 0
+              ? measured.map((r) => `${r.id === 'cpu' ? 'CPU' : r.device}: ${r.ms} ms`).join(' · ')
+                + (bench?.measured_at ? ` — measured ${bench.measured_at}` : '')
+              : 'Not measured yet.'}
+            {info ? ` · ${info.cpu_cores} cores, ${info.ram_gb} GB RAM` : ''}
           </div>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={!!info?.settings.high_performance}
-          aria-label="High performance mode"
-          className={`toggle-switch ${info?.settings.high_performance ? 'on' : ''}`}
-          disabled={!info || saving || busy}
-          onClick={() => save({ high_performance: !info?.settings.high_performance })}
-        >
-          <span className="toggle-knob" />
+        <button className="btn-ghost" onClick={measure} disabled={!info || busy}>
+          {measuring ? 'Measuring…' : 'Check again'}
         </button>
       </div>
     </div>

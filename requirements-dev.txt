@@ -1,0 +1,4 @@
+# Only for tools/verify_models.py, which compares Presentia's own model code
+# against the original insightface package. Not needed to run or build the app.
+-r requirements.txt
+insightface>=0.7.3

@@ -132,7 +132,9 @@ class StudentStatusUpdate(BaseModel):
 async def engine_status() -> dict:
     """Used by the Go shell to poll readiness; also consumed by the frontend."""
     ready = _engine_ready.is_set() and _engine_error is None
-    return {"ready": ready, "error": _engine_error}
+    # "message" says what first launch is busy with (hardware check, model
+    # download progress) so the app can show it instead of a bare spinner.
+    return {"ready": ready, "error": _engine_error, "message": FaceEngine.status().get("message")}
 
 
 @app.post("/api/shutdown", status_code=204)
@@ -144,23 +146,32 @@ async def shutdown_sidecar() -> None:
     asyncio.get_event_loop().call_later(0.2, os._exit, 0)
 
 
-# ── Performance: processing device + high performance mode ───────────────────
+# ── Performance: processing device + profile ─────────────────────────────────
 
 class PerfUpdate(BaseModel):
     device: str | None = None
-    high_performance: bool | None = None
+    profile: str | None = None
+
+
+class ChecksUpdate(BaseModel):
+    random_challenges: bool | None = None
+    antispoof: bool | None = None
 
 
 def _perf_payload() -> dict:
     import os
 
+    s = perf.get_settings()
     return {
-        "settings": perf.get_settings(),
+        "settings": {k: s.get(k) for k in ("device", "profile")},
+        "effective_profile": perf.effective_profile(s),
+        "profiles": {k: {"label": v["label"], "summary": v["summary"]} for k, v in perf.PROFILES.items()},
+        "benchmark": {k: v for k, v in (s.get("benchmark") or {}).items() if k != "signature"},
         "devices": perf.list_gpus(),
         "gpu_runtime": perf.gpu_runtime(),
         "status": FaceEngine.status(),
         "cpu_cores": os.cpu_count() or 0,
-        "threads": {"balanced": perf.cpu_threads(False), "high": perf.cpu_threads(True)},
+        "ram_gb": round(perf.total_ram_gb(), 1),
     }
 
 
@@ -176,11 +187,48 @@ async def put_perf(body: PerfUpdate) -> dict:
     valid = {"auto", "cpu"} | {g["id"] for g in perf.list_gpus()}
     if body.device is not None and body.device not in valid:
         raise HTTPException(status_code=400, detail=f"Unknown device {body.device!r}")
+    if body.profile is not None and body.profile not in {"auto", *perf.PROFILES}:
+        raise HTTPException(status_code=400, detail=f"Unknown profile {body.profile!r}")
     before = perf.get_settings()
-    after = perf.save_settings(body.device, body.high_performance)
+    after = perf.save_settings(device=body.device, profile=body.profile)
     if after != before:
         FaceEngine.reconfigure()
     return await asyncio.to_thread(_perf_payload)
+
+
+@app.post("/api/perf/benchmark")
+async def rerun_benchmark() -> dict:
+    """Measure this computer again (Settings → Performance → Check again)."""
+    await asyncio.to_thread(perf.benchmark, True)
+    FaceEngine.reconfigure()
+    return await asyncio.to_thread(_perf_payload)
+
+
+# ── Check-in security (Settings → Accessibility) ─────────────────────────────
+
+@app.get("/api/checks")
+async def get_checks() -> dict:
+    s = perf.get_settings()
+    return {"random_challenges": bool(s.get("random_challenges", True)),
+            "antispoof": bool(s.get("antispoof", False)),
+            "profile": perf.effective_profile(s)}
+
+
+@app.put("/api/checks")
+async def put_checks(body: ChecksUpdate) -> dict:
+    perf.save_settings(random_challenges=body.random_challenges, antispoof=body.antispoof)
+    if body.antispoof:
+        # Fetch the two small models now, not during a student's check-in.
+        def _warm() -> None:
+            try:
+                from app.core.antispoof import AntiSpoof
+
+                AntiSpoof.instance()
+            except Exception:  # noqa: BLE001 - retried at check-in
+                pass
+
+        threading.Thread(target=_warm, daemon=True).start()
+    return await get_checks()
 
 
 # ── Screen screenshot (for in-app region picker) ──────────────────────────────
@@ -830,6 +878,7 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
     result_queue: asyncio.Queue = asyncio.Queue(maxsize=256)
     send_lock = asyncio.Lock()
     view = {"mirror": True, "invert": False}
+    prof = perf.profile_params()  # fixed for this camera session
 
     # How often the monitored student's identity is re-checked, and how long
     # to wait before repeating a mismatch warning.
@@ -874,7 +923,7 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
                 obj.mirrored = view["mirror"]
 
     def _embed_largest(frame: np.ndarray) -> np.ndarray | None:
-        face = FaceEngine.instance().largest_face(frame)
+        face = FaceEngine.instance().largest_face(frame, "camera")
         if face is None or float(face.det_score) < 0.55:
             return None
         return np.asarray(face.normed_embedding, dtype=np.float32)
@@ -924,7 +973,7 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
             if now - last_reid < RECOGNIZE_EVERY:
                 return None
             last_reid = now
-            emb = FaceEngine.instance().embed_largest(frame)
+            emb = FaceEngine.instance().embed_largest(frame, "camera")
             if emb is None:
                 return {"type": "recognize", "found": False, "score": 0.0}
             score = FaceEngine.similarity(emb, target_emb)
@@ -952,7 +1001,7 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
                 and now - last_reid >= REID_EVERY
             ):
                 last_reid = now
-                emb = FaceEngine.instance().embed_largest(frame)
+                emb = FaceEngine.instance().embed_largest(frame, "camera")
                 if emb is not None:
                     reid = float(FaceEngine.similarity(emb, target_emb))
                     if (
@@ -985,7 +1034,9 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
             _push({"type": "error", "message": "Could not open camera"})
             return
         min_gap = 1.0 / 30.0  # some virtual cameras return frames instantly
+        preview_gap = 1.0 / prof["preview_fps"]
         last = 0.0
+        next_preview = 0.0
         frame = first
         try:
             while not stop_event.is_set():
@@ -1000,8 +1051,15 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
                                "message": "Camera stopped delivering frames."})
                         break
                 frame = _orient(frame, view["mirror"], view["invert"])
+                # Analysis sees every camera frame (blinks are short); the
+                # preview is sent at the profile's rate.
                 to_analyse.put(frame)
-                frames.publish(_frame_to_jpeg(frame))
+                # Evenly thin the camera's frames down to the profile's rate
+                # (e.g. 4 of every 5 frames for 24 fps from a 30 fps camera).
+                now = time.monotonic()
+                if now >= next_preview - 0.004:
+                    next_preview = max(next_preview + preview_gap, now - preview_gap)
+                    frames.publish(_frame_to_jpeg(frame, prof["jpeg_q"]))
                 frame = None
                 gap = time.monotonic() - last
                 if gap < min_gap:
@@ -1012,9 +1070,15 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
             to_analyse.put(None)
 
     def _analysis_thread() -> None:
+        n = 0
         while not stop_event.is_set():
             frame = to_analyse.take()
             if frame is None:
+                continue
+            # Low profile: continuous presence monitoring looks at every other
+            # frame; challenges (liveness, enrolment) always see every frame.
+            n += 1
+            if mode == "monitor" and prof["monitor_every"] > 1 and n % prof["monitor_every"]:
                 continue
             try:
                 with work_lock:
@@ -1074,8 +1138,16 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
                     elif action == "start_liveness":
                         _retire(tracker)
                         tracker = FaceMeshTracker()
+                        checks = perf.get_settings()
+                        spoof = None
+                        if checks.get("antispoof"):
+                            from app.core.antispoof import SpoofVote
+
+                            spoof = SpoofVote(every=3 if prof["preview_fps"] >= 20 else 2)
                         liveness = LivenessChecker(
-                            tracker, directional=msg.get("directional", True)
+                            tracker, directional=msg.get("directional", True),
+                            randomized=bool(checks.get("random_challenges", True)),
+                            spoof=spoof,
                         )
                         liveness.mirrored = view["mirror"]
                         guided = None
@@ -1201,8 +1273,9 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
     # analysis boxes; recognition works on the newest frame whenever it is
     # free. Meeting tiles barely move, so boxes that are a few frames old
     # still sit on the right faces.
-    PREVIEW_FPS = 24
-    PREVIEW_MAX_W = 1280
+    prof = perf.profile_params()  # fixed for this monitoring session
+    PREVIEW_FPS = prof["preview_fps"]
+    PREVIEW_MAX_W = prof["preview_max_w"]
     ANALYSIS_PUSH_EVERY = 0.25  # roster/unknowns updates, unless something changed
     CROP_REFRESH = 2.0          # re-encode an unknown face's thumbnail at most this often
 
@@ -1253,7 +1326,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         cv2.rectangle(view, p1, p2, colour, 2)
                         cv2.putText(view, label, (p1[0], max(18, p1[1] - 7)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2, cv2.LINE_AA)
-                    ok, buf = cv2.imencode(".jpg", view, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    ok, buf = cv2.imencode(".jpg", view, [cv2.IMWRITE_JPEG_QUALITY, prof["jpeg_q"]])
                     if ok:
                         raw = buf.tobytes()
                         _live.frame(raw)

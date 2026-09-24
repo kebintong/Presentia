@@ -1,48 +1,30 @@
-"""Face detection, embedding and matching built on InsightFace (buffalo_l).
+"""Face detection, embedding and matching.
 
-Runs on the CPU or on a GPU chosen in Settings (see app.core.perf)."""
+Runs the models directly with onnxruntime (see app.core.face_models) on the
+CPU or a GPU chosen in Settings → Performance (see app.core.perf). The
+performance profile picks the detectors; the ArcFace recogniser is the same
+in every profile, so embeddings — and enrolled students — never change.
+"""
 
 from __future__ import annotations
 
-import contextlib
 import threading
+from types import SimpleNamespace
 
 import numpy as np
+
+from app.core import face_models as fm
 
 # Cosine similarity on normalized embeddings; >= threshold counts as a match.
 MATCH_THRESHOLD = 0.45
 
 
-@contextlib.contextmanager
-def _default_session_options(so):
-    """InsightFace builds its onnxruntime sessions without SessionOptions,
-    so there is no way to pass thread limits through it. Supply ours as the
-    default for sessions created inside this block."""
-    import onnxruntime as ort
-
-    original = ort.InferenceSession.__init__
-
-    def patched(self, path_or_bytes, sess_options=None, providers=None,
-                provider_options=None, **kwargs):
-        return original(self, path_or_bytes, sess_options or so, providers,
-                        provider_options, **kwargs)
-
-    ort.InferenceSession.__init__ = patched
-    try:
-        yield
-    finally:
-        ort.InferenceSession.__init__ = original
-
-
 class FaceEngine:
-    """Lazily-initialized singleton around InsightFace's FaceAnalysis pipeline.
+    """Lazily-initialized singleton holding the detectors and the recogniser.
 
-    First call downloads the buffalo_l model pack (~300 MB) if not cached, so
-    call `FaceEngine.instance()` from a background thread.
-
-    Which device runs the models, and how many CPU threads they may use,
-    comes from app.core.perf (Settings → Performance). `reconfigure()`
-    rebuilds the engine with new settings and swaps it in once it works.
+    First use may download model files, so call `FaceEngine.instance()` from a
+    background thread. `reconfigure()` rebuilds it with new settings and
+    swaps it in once it works.
     """
 
     _instance: "FaceEngine | None" = None
@@ -51,35 +33,43 @@ class FaceEngine:
     _status: dict = {"state": "loading"}
 
     def __init__(self, settings: dict | None = None) -> None:
-        from insightface.app import FaceAnalysis
-
         from app.core import perf
 
         s = settings or perf.get_settings()
-        high = bool(s.get("high_performance"))
+        # First launch, or new hardware/driver: time the devices first so
+        # "Auto" picks the fastest one and a fitting profile.
+        if s.get("device", "auto") == "auto" or s.get("profile", "auto") == "auto":
+            FaceEngine._status = {"state": "loading", "message": "Checking this computer's speed…"}
+            try:
+                perf.benchmark()
+            except Exception:  # noqa: BLE001 - fall back to heuristics
+                pass
+            s = perf.get_settings()
+        self.profile = perf.effective_profile(s)
+        params = perf.PROFILES[self.profile]
+
         last_exc: Exception | None = None
-        # Best plan first (the chosen GPU), CPU last. A GPU that fails to
-        # initialise or to run falls back to the CPU so the app always works.
         for plan in perf.engine_plans(s):
             try:
-                so = perf.session_options(plan["backend"], high)
-                with _default_session_options(so):
-                    app = FaceAnalysis(
-                        name="buffalo_l",
-                        allowed_modules=["detection", "recognition"],
-                        providers=plan["providers"],
-                        provider_options=plan["provider_options"],
-                    )
-                    app.prepare(ctx_id=0, det_size=(640, 640))
-                # Warm-up: prove the device can actually run both models.
-                app.det_model.detect(np.zeros((480, 640, 3), dtype=np.uint8), max_num=0)
-                app.models["recognition"].get_feat(np.zeros((112, 112, 3), dtype=np.uint8))
-                used = app.det_model.session.get_providers()[0]
-                self._app = app
+                make = perf.session_maker(plan, params["threads"])
+                FaceEngine._status = {"state": "loading", "message": "Loading face models…"}
+                rec = fm.ArcFace(fm.model_path("arcface"), make)
+                meet, meet_name = self._detector(params["meet_detector"], params["meet_det_size"], make)
+                if params["cam_detector"] == params["meet_detector"]:
+                    cam, cam_name = meet, meet_name
+                else:
+                    cam, cam_name = self._detector(params["cam_detector"], params["cam_det_size"], make)
+                # Warm-up: prove the device can actually run the models.
+                meet.detect(np.zeros((480, 640, 3), dtype=np.uint8))
+                rec.embed_aligned(np.zeros((112, 112, 3), dtype=np.uint8))
+                used = rec.session.get_providers()[0]
+                self.rec, self.det_meet, self.det_cam = rec, meet, cam
+                self.cam_det_size = params["cam_det_size"]
                 self.backend = {"DmlExecutionProvider": "DirectML",
                                 "CUDAExecutionProvider": "CUDA"}.get(used, "CPU")
                 self.device = plan["device"] if self.backend != "CPU" else "CPU"
-                self.threads = so.intra_op_num_threads
+                self.threads = perf.cpu_threads(params["threads"])
+                self.detectors = {"camera": cam_name, "meeting": meet_name}
                 self.fell_back = last_exc is not None or plan["backend"] != self.backend
                 self.error = str(last_exc) if last_exc else None
                 break
@@ -87,6 +77,16 @@ class FaceEngine:
                 last_exc = exc
         else:
             raise last_exc  # type: ignore[misc]
+
+    @staticmethod
+    def _detector(name: str, det_size: int, make):
+        """(detector, name actually used)."""
+        if name == "yunet":
+            try:
+                return fm.YuNet(fm.model_path("yunet"), max_side=det_size), "yunet"
+            except Exception:  # noqa: BLE001 - YuNet unavailable: use the light SCRFD
+                name, det_size = "scrfd_2.5g", 480
+        return fm.SCRFD(fm.model_path(name), make, det_size=det_size), name
 
     @classmethod
     def instance(cls) -> "FaceEngine":
@@ -105,8 +105,12 @@ class FaceEngine:
         """What is running the models now, for the Settings panel."""
         inst = cls._instance
         out = dict(cls._status)
+        if fm.download_state.get("active"):
+            d = fm.download_state
+            out["message"] = (f"Downloading {d['file']} "
+                              f"({d['done_mb']:.0f} of {max(d['total_mb'], d['done_mb']):.0f} MB)…")
         if inst is not None:
-            for key in ("backend", "device", "threads", "fell_back", "error"):
+            for key in ("backend", "device", "threads", "fell_back", "error", "profile", "detectors"):
                 out[key] = getattr(inst, key, None)
         return out
 
@@ -133,42 +137,36 @@ class FaceEngine:
     # ------------------------------------------------------------------
 
     def detect_faces(
-        self, frame_bgr: np.ndarray
+        self, frame_bgr: np.ndarray, source: str = "meeting"
     ) -> list[tuple[tuple[int, int, int, int], float, np.ndarray]]:
         """Detection only (no identity embedding) — much cheaper per pass.
 
-        Returns (bbox, det_score, keypoints) per face.
+        Returns (bbox, det_score, keypoints) per face. `source` picks the
+        detector: "meeting" (screen captures, many small faces), "camera"
+        (a webcam, one close face) or "photo" (uploaded pictures).
         """
-        bboxes, kpss = self._app.det_model.detect(frame_bgr, max_num=0, metric="default")
-        out = []
-        for i in range(bboxes.shape[0]):
-            bbox = tuple(int(v) for v in bboxes[i, :4])
-            out.append((bbox, float(bboxes[i, 4]), kpss[i]))
-        return out
+        det = self.det_cam if source == "camera" else self.det_meet
+        return det.detect(frame_bgr)
 
-    def embed_face(
-        self, frame_bgr: np.ndarray, bbox: tuple, kps: np.ndarray
-    ) -> np.ndarray:
+    def embed_face(self, frame_bgr: np.ndarray, bbox: tuple, kps: np.ndarray) -> np.ndarray:
         """Identity embedding for one already-detected face."""
-        from insightface.app.common import Face
+        return self.rec.embed(frame_bgr, kps)
 
-        face = Face(bbox=np.asarray(bbox, dtype=np.float32), kps=kps, det_score=1.0)
-        self._app.models["recognition"].get(frame_bgr, face)
-        return np.asarray(face.normed_embedding, dtype=np.float32)
+    def largest_face(self, frame_bgr: np.ndarray, source: str = "photo"):
+        """The largest detected face (with its embedding), or None.
 
-    def largest_face(self, frame_bgr: np.ndarray):
-        """Return the largest detected face object, or None."""
-        faces = self._app.get(frame_bgr)
+        Returns an object with .bbox, .kps, .det_score and .normed_embedding.
+        """
+        faces = self.detect_faces(frame_bgr, source)
         if not faces:
             return None
-        return max(
-            faces,
-            key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
-        )
+        bbox, score, kps = max(faces, key=lambda f: (f[0][2] - f[0][0]) * (f[0][3] - f[0][1]))
+        return SimpleNamespace(bbox=np.asarray(bbox, dtype=np.float32), kps=kps, det_score=score,
+                               normed_embedding=self.rec.embed(frame_bgr, kps))
 
-    def embed_largest(self, frame_bgr: np.ndarray) -> np.ndarray | None:
+    def embed_largest(self, frame_bgr: np.ndarray, source: str = "photo") -> np.ndarray | None:
         """L2-normalized 512-d embedding of the largest face, or None."""
-        face = self.largest_face(frame_bgr)
+        face = self.largest_face(frame_bgr, source)
         if face is None:
             return None
         return np.asarray(face.normed_embedding, dtype=np.float32)
@@ -199,11 +197,7 @@ class FaceEngine:
         known: list[tuple[int, np.ndarray]],
         threshold: float = MATCH_THRESHOLD,
     ) -> list[tuple[int, float, tuple[int, int, int, int]]]:
-        """Recognize every face in the frame (e.g. a grid of meeting tiles).
-
-        Returns one (student_id, score, bbox) per recognized student; each
-        student is reported at most once, keeping their best-scoring face.
-        """
+        """Recognize every face in the frame (e.g. a grid of meeting tiles)."""
         matches, _ = self.analyze_all(frame_bgr, known, threshold)
         return matches
 
@@ -216,17 +210,11 @@ class FaceEngine:
         list[tuple[int, float, tuple[int, int, int, int]]],
         list[tuple[np.ndarray, tuple[int, int, int, int]]],
     ]:
-        """Like identify_all, but also returns unrecognized faces.
-
-        Returns (matches, unknowns) where matches are (student_id, score,
-        bbox) — one per student, best score kept — and unknowns are
-        (embedding, bbox) for every face that matched nobody.
-        """
+        """Every face in the frame: (matches, unknowns), one match per student."""
         best: dict[int, tuple[float, tuple[int, int, int, int]]] = {}
         unknowns: list[tuple[np.ndarray, tuple[int, int, int, int]]] = []
-        for face in self._app.get(frame_bgr):
-            emb = np.asarray(face.normed_embedding, dtype=np.float32)
-            bbox = tuple(int(v) for v in face.bbox)
+        for bbox, _score, kps in self.detect_faces(frame_bgr, "meeting"):
+            emb = self.rec.embed(frame_bgr, kps)
             match = self.identify(emb, known, threshold)
             if match is None:
                 unknowns.append((emb, bbox))

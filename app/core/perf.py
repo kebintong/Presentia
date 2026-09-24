@@ -1,36 +1,68 @@
-"""Processing-device and performance settings for the face models.
+"""Processing device, performance profile and check-in security settings.
 
-Two user settings, persisted next to the database and applied when the
-FaceEngine is (re)built:
+Settings (persisted next to the database in ``performance.json``):
 
-- ``device``: "auto", "cpu", or "gpu:<index>" for a specific graphics
-  adapter. Adapters are discovered on the machine at run time — nothing is
-  tied to a particular card or vendor. On Windows every DirectX 12 capable
-  GPU (AMD, NVIDIA, Intel) works through DirectML when the sidecar ships
-  with ``onnxruntime-directml``; elsewhere CUDA is used when
-  ``onnxruntime-gpu`` is installed.
-- ``high_performance``: favour recognition speed over leaving CPU for other
-  programs (more model threads, above-normal process priority, no pacing of
-  analysis passes). Off by default, which keeps the live preview and the
-  meeting app itself smooth.
+- ``device``: "auto", "cpu", or "gpu:<index>". Adapters are discovered on the
+  machine at run time (DXGI on Windows, CUDA elsewhere) — nothing is tied to
+  a particular card or vendor.
+- ``profile``: "auto", "low", "balanced" or "high" (see PROFILES). Auto uses
+  the result of a short hardware check that times face detection on the CPU
+  and on every usable GPU. The check runs on first launch and again whenever
+  the CPU, memory, graphics card, graphics driver or onnxruntime changes.
+- ``random_challenges``: randomised liveness prompts at check-in.
+- ``antispoof``: photo / screen-replay detection at check-in.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import platform
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
+import numpy as np
+
 _lock = threading.Lock()
-_DEFAULTS = {"device": "auto", "high_performance": False}
+_DEFAULTS = {"device": "auto", "profile": "auto", "random_challenges": True, "antispoof": False}
 _settings: dict | None = None
 
-# Balanced mode paces screen-monitoring analysis at this rate; the preview
-# is unaffected (it runs on its own thread at full rate).
-BALANCED_ANALYSIS_FPS = 8.0
+# What each profile changes. The recogniser (ArcFace) is the same in all of
+# them, so switching never affects who matches whom.
+PROFILES: dict[str, dict] = {
+    "low": {
+        "label": "Low",
+        "summary": "For older or low-power computers: smaller detectors, 15 fps preview, "
+                   "4 recognition passes a second.",
+        "cam_detector": "yunet", "cam_det_size": 320,
+        "meet_detector": "scrfd_2.5g", "meet_det_size": 640,
+        "preview_fps": 15, "preview_max_w": 960, "jpeg_q": 65,
+        "analysis_fps": 4.0, "monitor_every": 2,
+        "threads": "half", "priority": "normal",
+    },
+    "balanced": {
+        "label": "Balanced",
+        "summary": "Light detector, full-rate preview, 8 recognition passes a second.",
+        "cam_detector": "scrfd_2.5g", "cam_det_size": 480,
+        "meet_detector": "scrfd_2.5g", "meet_det_size": 640,
+        "preview_fps": 24, "preview_max_w": 1280, "jpeg_q": 70,
+        "analysis_fps": 8.0, "monitor_every": 1,
+        "threads": "half", "priority": "normal",
+    },
+    "high": {
+        "label": "High",
+        "summary": "Full-size detector, recognition as often as possible, higher priority. "
+                   "Best for large classes on fast computers.",
+        "cam_detector": "scrfd_10g", "cam_det_size": 640,
+        "meet_detector": "scrfd_10g", "meet_det_size": 640,
+        "preview_fps": 24, "preview_max_w": 1280, "jpeg_q": 72,
+        "analysis_fps": 0.0, "monitor_every": 1,
+        "threads": "most", "priority": "above",
+    },
+}
 
 
 def _settings_path() -> Path:
@@ -48,17 +80,20 @@ def get_settings() -> dict:
                 s.update(json.loads(_settings_path().read_text(encoding="utf-8")))
             except Exception:  # noqa: BLE001 - missing/corrupt file = defaults
                 pass
+            # 1.3.0 had a "high performance" switch instead of profiles.
+            if "high_performance" in s:
+                if s.pop("high_performance") and s.get("profile", "auto") == "auto":
+                    s["profile"] = "high"
             _settings = s
         return dict(_settings)
 
 
-def save_settings(device: str | None = None, high_performance: bool | None = None) -> dict:
+def save_settings(**changes) -> dict:
     global _settings
     s = get_settings()
-    if device is not None:
-        s["device"] = device
-    if high_performance is not None:
-        s["high_performance"] = bool(high_performance)
+    for k, v in changes.items():
+        if v is not None:
+            s[k] = v
     with _lock:
         _settings = s
         try:
@@ -78,6 +113,27 @@ def available_providers() -> list[str]:
         return list(ort.get_available_providers())
     except Exception:  # noqa: BLE001
         return []
+
+
+def total_ram_gb() -> float:
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class MEMSTAT(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32),
+                            ("ullTotalPhys", ctypes.c_uint64), ("ullAvailPhys", ctypes.c_uint64),
+                            ("ullTotalPageFile", ctypes.c_uint64), ("ullAvailPageFile", ctypes.c_uint64),
+                            ("ullTotalVirtual", ctypes.c_uint64), ("ullAvailVirtual", ctypes.c_uint64),
+                            ("ullAvailExtendedVirtual", ctypes.c_uint64)]
+
+            m = MEMSTAT()
+            m.dwLength = ctypes.sizeof(MEMSTAT)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+            return m.ullTotalPhys / 2**30
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 def _dxgi_adapters() -> list[dict]:
@@ -137,10 +193,24 @@ def _dxgi_adapters() -> list[dict]:
                 if method(adapter, 10, ctypes.POINTER(DESC1))(adapter, ctypes.byref(desc)) == 0:
                     software = bool(desc.Flags & 0x2) or desc.VendorId == 0x1414
                     if not software:
+                        # Driver version (used to notice driver updates and
+                        # re-check performance): IDXGIAdapter::CheckInterfaceSupport = 9.
+                        umd = ctypes.c_longlong(0)
+                        iid_device = GUID(0x54EC77FA, 0x1377, 0x44E6,
+                                          (ctypes.c_ubyte * 8)(0x8C, 0x32, 0x88, 0xFD, 0x5F, 0x44, 0xC8, 0x4C))
+                        drv = ""
+                        try:
+                            if method(adapter, 9, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_longlong))(
+                                    adapter, ctypes.byref(iid_device), ctypes.byref(umd)) == 0:
+                                v = umd.value
+                                drv = f"{v >> 48 & 0xFFFF}.{v >> 32 & 0xFFFF}.{v >> 16 & 0xFFFF}.{v & 0xFFFF}"
+                        except Exception:  # noqa: BLE001
+                            pass
                         out.append({
                             "index": index,
                             "name": desc.Description.strip(),
                             "vram_mb": int(desc.DedicatedVideoMemory // (1024 * 1024)),
+                            "driver": drv,
                         })
             finally:
                 method(adapter, 2)(adapter)  # Release
@@ -170,6 +240,7 @@ def _cuda_devices() -> list[dict]:
 
 
 _gpu_cache: list[dict] | None = None
+
 
 
 def list_gpus() -> list[dict]:
@@ -204,59 +275,50 @@ def gpu_runtime() -> str | None:
     return None
 
 
-# ── Engine configuration ─────────────────────────────────────────────────────
+# ── Hardware check (benchmark) ───────────────────────────────────────────────
 
-def cpu_threads(high_performance: bool) -> int:
+def hardware_signature() -> str:
+    try:
+        import onnxruntime as ort
+
+        ort_v = ort.__version__
+    except Exception:  # noqa: BLE001
+        ort_v = "?"
+    gpus = ";".join(f"{g['name']}|{g['vram_mb']}|{g.get('driver', '')}" for g in list_gpus())
+    return "|".join([platform.processor() or platform.machine(), str(os.cpu_count()),
+                     f"{round(total_ram_gb())}", gpus, ort_v, ",".join(available_providers())])
+
+
+def _plan(device_id: str) -> dict | None:
+    """Provider setup for "cpu" or "gpu:<n>", or None if that GPU is gone."""
+    if device_id == "cpu":
+        return {"id": "cpu", "providers": ["CPUExecutionProvider"], "provider_options": [{}],
+                "device": "CPU", "backend": "CPU"}
+    g = next((g for g in list_gpus() if g["id"] == device_id and g["usable"]), None)
+    if g is None:
+        return None
+    ep = "DmlExecutionProvider" if g["backend"] == "DirectML" else "CUDAExecutionProvider"
+    return {"id": g["id"], "providers": [ep, "CPUExecutionProvider"],
+            "provider_options": [{"device_id": str(g["index"])}, {}],
+            "device": g["name"], "backend": g["backend"]}
+
+
+def cpu_threads(threads: str = "half") -> int:
     cores = os.cpu_count() or 4
-    # Balanced: leave half the machine for capture, encoding, the webview and
-    # the meeting app, which is what keeps the live preview from stuttering.
-    balanced = max(2, cores // 2)
-    if high_performance:
-        return max(balanced, cores - 1)
-    return balanced
+    # "half" leaves room for capture, encoding, the webview and the meeting
+    # app itself — which is what keeps the live preview from stuttering.
+    half = max(2, cores // 2)
+    return max(half, cores - 1) if threads == "most" else half
 
 
-def engine_plans(settings: dict | None = None) -> list[dict]:
-    """Provider setups to try, best first; the CPU is always the last resort.
-
-    Each plan: {"providers", "provider_options", "device", "backend"}.
-    """
-    s = settings or get_settings()
-    device = str(s.get("device", "auto"))
-    cpu = {"providers": ["CPUExecutionProvider"], "provider_options": [{}],
-           "device": "CPU", "backend": "CPU"}
-    if device == "cpu":
-        return [cpu]
-
-    gpus = [g for g in list_gpus() if g["usable"]]
-    chosen = None
-    if device.startswith("gpu:"):
-        chosen = next((g for g in gpus if g["id"] == device), None)
-    if chosen is None and gpus:
-        # Auto (or a card that has since been removed): the adapter with the
-        # most dedicated memory — a discrete GPU over an integrated one.
-        chosen = max(gpus, key=lambda g: g["vram_mb"])
-    if chosen is None:
-        return [cpu]
-
-    if chosen["backend"] == "DirectML":
-        gpu = {"providers": ["DmlExecutionProvider", "CPUExecutionProvider"],
-               "provider_options": [{"device_id": str(chosen["index"])}, {}],
-               "device": chosen["name"], "backend": "DirectML"}
-    else:
-        gpu = {"providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
-               "provider_options": [{"device_id": str(chosen["index"])}, {}],
-               "device": chosen["name"], "backend": "CUDA"}
-    return [gpu, cpu]
-
-
-def session_options(backend: str, high_performance: bool):
+def session_options(backend: str, threads: str = "half"):
     import onnxruntime as ort
 
     so = ort.SessionOptions()
-    so.intra_op_num_threads = cpu_threads(high_performance)
+    so.intra_op_num_threads = cpu_threads(threads)
     so.inter_op_num_threads = 1
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    so.log_severity_level = 3
     if backend == "DirectML":
         # Required by the DirectML execution provider.
         so.enable_mem_pattern = False
@@ -264,19 +326,116 @@ def session_options(backend: str, high_performance: bool):
     return so
 
 
+def session_maker(plan: dict, threads: str = "half"):
+    import onnxruntime as ort
+
+    so = session_options(plan["backend"], threads)
+
+    def make(path: str):
+        return ort.InferenceSession(path, sess_options=so, providers=plan["providers"],
+                                    provider_options=plan["provider_options"])
+
+    return make
+
+
+_bench_lock = threading.Lock()
+
+
+def benchmark(force: bool = False) -> dict:
+    """Time face detection on the CPU and every usable GPU; pick the fastest
+    device and the profile that suits this computer. Cached until the
+    hardware, driver or onnxruntime changes."""
+    with _bench_lock:
+        sig = hardware_signature()
+        stored = get_settings().get("benchmark")
+        if stored and stored.get("signature") == sig and not force:
+            return stored
+
+        from app.core import face_models as fm
+
+        det_path = fm.model_path("scrfd_2.5g")
+        rng = np.random.default_rng(0)
+        img = rng.integers(0, 255, (480, 640, 3), dtype=np.uint8)
+        results = []
+        for dev in ["cpu"] + [g["id"] for g in list_gpus() if g["usable"]]:
+            plan = _plan(dev)
+            if plan is None:
+                continue
+            try:
+                det = fm.SCRFD(det_path, session_maker(plan, "half"), det_size=640)
+                ms = fm.time_it(lambda d=det: d.detect(img), runs=7, warmup=3)
+                results.append({"id": dev, "device": plan["device"], "backend": plan["backend"],
+                                "ms": round(ms, 1)})
+            except Exception as exc:  # noqa: BLE001 - a GPU that cannot run it
+                results.append({"id": dev, "device": plan["device"], "backend": plan["backend"],
+                                "error": str(exc)[:200]})
+        ok = [r for r in results if "ms" in r]
+        best = min(ok, key=lambda r: r["ms"]) if ok else {"id": "cpu", "ms": 999.0}
+        cores, ram = os.cpu_count() or 1, total_ram_gb()
+        if cores <= 2 or (0 < ram < 4.5):
+            rec = "low"
+        elif best["ms"] <= 6:
+            rec = "high"
+        elif best["ms"] <= 30:
+            rec = "balanced"
+        else:
+            rec = "low"
+        out = {"signature": sig, "results": results, "best": best["id"], "best_ms": best["ms"],
+               "recommended": rec, "cores": cores, "ram_gb": round(ram, 1),
+               "measured_at": time.strftime("%Y-%m-%d %H:%M")}
+        save_settings(benchmark=out)
+        return out
+
+
+# ── What to run with ─────────────────────────────────────────────────────────
+
+def effective_profile(settings: dict | None = None) -> str:
+    s = settings or get_settings()
+    p = s.get("profile", "auto")
+    if p in PROFILES:
+        return p
+    return (s.get("benchmark") or {}).get("recommended", "balanced")
+
+
+def profile_params(settings: dict | None = None) -> dict:
+    return PROFILES[effective_profile(settings)]
+
+
+def engine_plans(settings: dict | None = None) -> list[dict]:
+    """Provider setups to try, best first; the CPU is always the last resort."""
+    s = settings or get_settings()
+    device = str(s.get("device", "auto"))
+    cpu = _plan("cpu")
+    if device == "cpu":
+        return [cpu]
+    chosen = _plan(device) if device.startswith("gpu:") else None
+    if chosen is None:
+        best = (s.get("benchmark") or {}).get("best")
+        if best:
+            chosen = _plan(best)  # auto: the fastest device measured
+        else:
+            gpus = [g for g in list_gpus() if g["usable"]]
+            if gpus:
+                chosen = _plan(max(gpus, key=lambda g: g["vram_mb"])["id"])
+    if chosen is None or chosen["id"] == "cpu":
+        return [cpu]
+    return [chosen, cpu]
+
+
 def analysis_min_interval() -> float:
     """Minimum seconds between screen-analysis passes (0 = as fast as possible)."""
-    return 0.0 if get_settings().get("high_performance") else 1.0 / BALANCED_ANALYSIS_FPS
+    fps = profile_params()["analysis_fps"]
+    return 1.0 / fps if fps else 0.0
 
 
 def apply_process_priority() -> None:
-    """High performance runs the sidecar above normal priority (Windows)."""
+    """The High profile runs the sidecar above normal priority (Windows)."""
     if sys.platform != "win32":
         return
     try:
         import ctypes
 
-        cls = 0x8000 if get_settings().get("high_performance") else 0x20  # ABOVE_NORMAL / NORMAL
+        cls = 0x8000 if profile_params()["priority"] == "above" else 0x20  # ABOVE_NORMAL / NORMAL
         k32 = ctypes.windll.kernel32
         k32.SetPriorityClass(k32.GetCurrentProcess(), cls)
     except Exception:  # noqa: BLE001

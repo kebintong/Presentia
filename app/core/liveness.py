@@ -35,6 +35,7 @@ HOLD_FRAMES = 3     # consecutive samples a head turn must be held to count
 YAW_LEFT = 0.36     # nose position ratio below this = head turned left
 YAW_RIGHT = 0.64    # above this = head turned right
 YAW_CENTER_LO, YAW_CENTER_HI = 0.42, 0.58
+PITCH_UP_RATIO = 0.82  # "look up": nose rises to this share of its straight-ahead position
 
 
 def _ensure_model() -> Path:
@@ -109,65 +110,119 @@ def _yaw_ratio(landmarks) -> float:
 
 
 class LivenessChecker:
-    """Stateful challenge: rapid blinks, then held head turns.
+    """Stateful check-in challenge that a photo, GIF or recorded clip can't pass.
 
-    Anti-coincidence hardening: blinks only count if they all happen within a
-    short window (natural blinking is too spread out to pass), and head turns
-    must be *held* for several consecutive samples (a random glance sideways
-    doesn't count).
+    Two sequences:
 
-    Two modes:
-    - directional=True (webcam selfie view, mirrored): turn LEFT, recenter,
-      turn RIGHT — prompts match what the user sees on screen.
-    - directional=False (remote video, e.g. a Meet tile, not mirrored): turn
-      to EITHER side, recenter, then the OPPOSITE side. Robust regardless of
-      whether the video is mirrored.
+    - randomised (default, Settings → Accessibility): look straight, then
+      three actions drawn at random every time — blink twice, blink three
+      times, turn left, turn right, look up — each with its own time limit.
+      A pre-recorded clip cannot know the order, and a GIF cannot react.
+    - fixed (randomised off): blink 3 times quickly, turn left, look straight,
+      turn right — the original sequence, easier for users who need more time.
+
+    Anti-coincidence hardening: blinks only count if they come quickly
+    (within BLINK_WINDOW), and head poses must be *held* for a few samples.
+
+    ``directional=False`` (remote video such as a Meet tile, whose mirroring is
+    unknown) asks for "either side" and then "the other side" instead of
+    LEFT/RIGHT. Optionally a SpoofVote (app.core.antispoof) samples the face
+    throughout, and a face that looks like a print or a screen fails at the end.
     """
 
-    STAGE_BLINK = "blink"
-    STAGE_TURN_LEFT = "turn_left"
-    STAGE_CENTER = "recenter"
-    STAGE_TURN_RIGHT = "turn_right"
-    STAGE_TURN_ANY = "turn_any"
-    STAGE_TURN_OPPOSITE = "turn_opposite"
     STAGE_PASSED = "passed"
+    STAGE_FAILED = "failed"
+    STEP_TIME = 8.0        # seconds allowed per randomised action
+    FIXED_TIME = 60.0      # the fixed sequence keeps the old, generous limit
 
-    def __init__(self, tracker: FaceMeshTracker, directional: bool = True) -> None:
+    _PROMPTS = {
+        "center": "Look straight at the camera",
+        "blink2": "Blink twice quickly",
+        "blink3": "Blink three times quickly",
+        "left": "Turn your head to the LEFT and hold",
+        "right": "Turn your head to the RIGHT and hold",
+        "turn_any": "Turn your head to either side and hold",
+        "turn_opposite": "Now turn to the OTHER side and hold",
+        "up": "Tilt your head UP and hold",
+    }
+
+    def __init__(self, tracker: FaceMeshTracker, directional: bool = True,
+                 randomized: bool = True, spoof=None) -> None:
         self._tracker = tracker
         self._directional = directional
+        self._randomized = randomized
+        self._spoof = spoof
         # LEFT/RIGHT assume the mirrored selfie preview; see _yaw().
         self.mirrored = True
         self.reset()
 
     def reset(self) -> None:
-        self.stage = self.STAGE_BLINK
+        import random
+
+        if self._randomized:
+            turns = ["left", "right"] if self._directional else ["turn_any"]
+            pool_blink = ["blink2", "blink3"]
+            picks = [random.choice(pool_blink), random.choice(turns)]
+            extra = [a for a in (turns + ["up"]) if a not in picks]  # one blink step is enough
+            picks.append(random.choice(extra))
+            random.shuffle(picks)
+            if not self._directional and "turn_any" in picks:
+                picks.insert(picks.index("turn_any") + 1, "turn_opposite")
+            self.steps = ["center"] + picks
+        else:
+            self.steps = (["blink3", "left", "center", "right"] if self._directional
+                          else ["blink3", "turn_any", "center", "turn_opposite"])
+        self.step = 0
+        self.stage = self.steps[0]
+        self._step_started: float | None = None
         self._blink_times: list[float] = []
         self._eye_closed = False
-        self._first_side: str | None = None  # "low"/"high" yaw side turned first
-        self._hold = 0          # consecutive samples the current pose was held
+        self._first_side: str | None = None
+        self._hold = 0
         self._hold_side: str | None = None
+        self._pitch_samples: list[float] = []
+        self._pitch_base: float | None = None
+        self.reason = ""
+        self.spoof_score: float | None = None
 
     @property
     def passed(self) -> bool:
         return self.stage == self.STAGE_PASSED
 
+    @property
+    def failed(self) -> bool:
+        return self.stage == self.STAGE_FAILED
+
     def prompt(self) -> str:
-        return {
-            self.STAGE_BLINK: (
-                f"Blink {BLINKS_REQUIRED} times quickly "
-                f"({len(self._blink_times)}/{BLINKS_REQUIRED})"
-            ),
-            self.STAGE_TURN_LEFT: "Turn your head to the LEFT and hold",
-            self.STAGE_CENTER: "Look straight at the camera",
-            self.STAGE_TURN_RIGHT: "Turn your head to the RIGHT and hold",
-            self.STAGE_TURN_ANY: "Turn your head to either side and hold",
-            self.STAGE_TURN_OPPOSITE: "Now turn to the OTHER side and hold",
-            self.STAGE_PASSED: "Liveness check passed",
-        }[self.stage]
+        if self.stage == self.STAGE_PASSED:
+            return "Liveness check passed"
+        if self.stage == self.STAGE_FAILED:
+            return self.reason
+        text = self._PROMPTS[self.stage]
+        if self.stage in ("blink2", "blink3"):
+            text += f" ({len(self._blink_times)}/{self._blinks_needed()})"
+        return text
+
+    def _blinks_needed(self) -> int:
+        return 2 if self.stage == "blink2" else BLINKS_REQUIRED
+
+    def _yaw(self, landmarks) -> float:
+        """Yaw in the mirrored (selfie) frame of reference."""
+        yaw = _yaw_ratio(landmarks)
+        return yaw if self.mirrored else 1.0 - yaw
+
+    @staticmethod
+    def _pitch(landmarks) -> float:
+        """Nose position between the eye line and the chin (smaller = head up)."""
+        eye_y = (landmarks[33].y + landmarks[263].y) / 2
+        chin_y = landmarks[152].y
+        if chin_y - eye_y == 0:
+            return 0.5
+        return (landmarks[_NOSE_TIP].y - eye_y) / (chin_y - eye_y)
 
     def _held(self, condition: bool, side: str | None = None) -> bool:
-        """True once `condition` has been continuously true for HOLD_FRAMES
-        samples (on the same side, when sides matter)."""
+        """True once `condition` has held for HOLD_FRAMES consecutive samples
+        (on the same side, when sides matter)."""
         if condition and (side is None or side == self._hold_side or self._hold == 0):
             self._hold += 1
             self._hold_side = side
@@ -176,58 +231,99 @@ class LivenessChecker:
             self._hold_side = side if condition else None
         return self._hold >= HOLD_FRAMES
 
-    def _yaw(self, landmarks) -> float:
-        """Yaw in the mirrored (selfie) frame of reference."""
-        yaw = _yaw_ratio(landmarks)
-        return yaw if self.mirrored else 1.0 - yaw
+    def _advance(self) -> None:
+        self.step += 1
+        self._hold = 0
+        self._hold_side = None
+        self._blink_times = []
+        self._step_started = None
+        if self.step < len(self.steps):
+            self.stage = self.steps[self.step]
+            return
+        # All actions done — the replay check has the last word.
+        if self._spoof is not None:
+            ok, score = self._spoof.verdict()
+            self.spoof_score = score
+            if not ok:
+                self.stage = self.STAGE_FAILED
+                self.reason = ("This looks like a photo or a screen, not a live camera. "
+                               "Check-in stopped.")
+                return
+        self.stage = self.STAGE_PASSED
+
+    def _fail(self, why: str) -> None:
+        self.stage = self.STAGE_FAILED
+        self.reason = why
 
     def process(self, frame_bgr: np.ndarray) -> dict:
         """Advance the challenge with one frame. Returns state for the UI."""
+        if self.stage in (self.STAGE_PASSED, self.STAGE_FAILED):
+            return self._state(True)
+        now = time.monotonic()
+        if self._step_started is None:
+            self._step_started = now
+        limit = self.STEP_TIME if self._randomized else self.FIXED_TIME
+        if self.stage != "center" and now - self._step_started > limit:
+            self._fail(f"Too slow: \"{self._PROMPTS[self.stage]}\" was not done in time.")
+            return self._state(True)
+
         landmarks = self._tracker.landmarks(frame_bgr)
         if landmarks is None:
             return {"face_found": False, "stage": self.stage,
-                    "prompt": "Position your face inside the frame", "passed": self.passed}
+                    "prompt": "Position your face inside the frame", "passed": False,
+                    "failed": False, "step": self.step, "steps": len(self.steps)}
 
-        if self.stage == self.STAGE_BLINK:
+        if self._spoof is not None:
+            h, w = frame_bgr.shape[:2]
+            xs = [p.x for p in landmarks]
+            ys = [p.y for p in landmarks]
+            self._spoof.maybe_add(frame_bgr, (min(xs) * w, min(ys) * h, max(xs) * w, max(ys) * h))
+
+        st = self.stage
+        yaw = self._yaw(landmarks)
+        if st == "center":
+            centred = YAW_CENTER_LO < yaw < YAW_CENTER_HI
+            if centred:
+                self._pitch_samples.append(self._pitch(landmarks))
+            if self._held(centred):
+                if self._pitch_base is None and self._pitch_samples:
+                    self._pitch_base = float(np.median(self._pitch_samples))
+                self._advance()
+        elif st in ("blink2", "blink3"):
             ear = min(_ear(landmarks, _LEFT_EYE), _ear(landmarks, _RIGHT_EYE))
             if not self._eye_closed and ear < EAR_CLOSED:
                 self._eye_closed = True
             elif self._eye_closed and ear > EAR_OPEN:
                 self._eye_closed = False
-                now = time.monotonic()
-                # only blinks inside the rolling window count; natural
-                # blinking (one every few seconds) never accumulates enough
-                self._blink_times = [
-                    t for t in self._blink_times if now - t <= BLINK_WINDOW
-                ] + [now]
-                if len(self._blink_times) >= BLINKS_REQUIRED:
-                    self._hold = 0
-                    self.stage = (self.STAGE_TURN_LEFT if self._directional
-                                  else self.STAGE_TURN_ANY)
-        elif self.stage == self.STAGE_TURN_LEFT:
-            if self._held(self._yaw(landmarks) < YAW_LEFT):
-                self._hold = 0
-                self.stage = self.STAGE_CENTER
-        elif self.stage == self.STAGE_TURN_ANY:
-            yaw = self._yaw(landmarks)
+                # only quick blinks count; natural blinking is too spread out
+                self._blink_times = [t for t in self._blink_times if now - t <= BLINK_WINDOW] + [now]
+                if len(self._blink_times) >= self._blinks_needed():
+                    self._advance()
+        elif st == "left":
+            if self._held(yaw < YAW_LEFT):
+                self._advance()
+        elif st == "right":
+            if self._held(yaw > YAW_RIGHT):
+                self._advance()
+        elif st == "turn_any":
             side = "low" if yaw < YAW_LEFT else ("high" if yaw > YAW_RIGHT else None)
             if self._held(side is not None, side):
                 self._first_side = self._hold_side
-                self._hold = 0
-                self.stage = self.STAGE_CENTER
-        elif self.stage == self.STAGE_CENTER:
-            if YAW_CENTER_LO < self._yaw(landmarks) < YAW_CENTER_HI:
-                self._hold = 0
-                self.stage = (self.STAGE_TURN_RIGHT if self._directional
-                              else self.STAGE_TURN_OPPOSITE)
-        elif self.stage == self.STAGE_TURN_RIGHT:
-            if self._held(self._yaw(landmarks) > YAW_RIGHT):
-                self.stage = self.STAGE_PASSED
-        elif self.stage == self.STAGE_TURN_OPPOSITE:
-            yaw = self._yaw(landmarks)
+                self._advance()
+        elif st == "turn_opposite":
             opposite = (yaw > YAW_RIGHT) if self._first_side == "low" else (yaw < YAW_LEFT)
             if self._held(opposite):
-                self.stage = self.STAGE_PASSED
+                self._advance()
+        elif st == "up":
+            base = self._pitch_base if self._pitch_base is not None else 0.45
+            if self._held(self._pitch(landmarks) < base * PITCH_UP_RATIO):
+                self._advance()
+        return self._state(True)
 
-        return {"face_found": True, "stage": self.stage,
-                "prompt": self.prompt(), "passed": self.passed}
+    def _state(self, face_found: bool) -> dict:
+        out = {"face_found": face_found, "stage": self.stage, "prompt": self.prompt(),
+               "passed": self.passed, "failed": self.failed,
+               "step": min(self.step + 1, len(self.steps)), "steps": len(self.steps)}
+        if self.spoof_score is not None:
+            out["spoof_score"] = round(self.spoof_score, 3)
+        return out

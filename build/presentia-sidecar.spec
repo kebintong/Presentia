@@ -29,7 +29,9 @@ hiddenimports = []
 # "onnxruntime" is also the import name of onnxruntime-directml (the Windows
 # build, which adds GPU support through DirectML) — collect_all picks up its
 # DirectML.dll either way.
-for pkg in ("onnxruntime", "insightface", "mediapipe", "cv2", "uvicorn"):
+# insightface is no longer used at run time (app/core/face_models.py runs its
+# model files directly), so it and its large dependencies stay out of the build.
+for pkg in ("onnxruntime", "mediapipe", "cv2", "uvicorn"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -67,6 +69,8 @@ hiddenimports += [
     "app.core.camera",
     "app.core.enrollment",
     "app.core.face_engine",
+    "app.core.face_models",
+    "app.core.antispoof",
     "app.core.perf",
     "app.core.liveness",
     "app.core.monitor",
@@ -76,31 +80,18 @@ hiddenimports += [
     "app.core.v4l2_reader",
 ]
 
-# insightface's get_object() checks sys.frozen and when True looks for data at:
-#   sys._MEIPASS/objects/<name>.pkl   (NOT insightface/data/objects/)
-# So we must place the file at the "objects" destination directly.
-import site as _site
-_if_objects = None
-for _sp in _site.getsitepackages():
-    _candidate = Path(_sp) / "insightface" / "data" / "objects"
-    if _candidate.exists():
-        _if_objects = _candidate
-        break
-if _if_objects is None:
-    # fallback: search relative to this spec file's venv
-    _if_objects = PROJECT_ROOT / ".venv" / "Lib" / "site-packages" / "insightface" / "data" / "objects"
-datas += [(str(_if_objects / "meanshape_68.pkl"), "objects")]
-
 # Bundle the MediaPipe landmark model that ships in the repo already.
 datas += [(str(PROJECT_ROOT / "models" / "face_landmarker.task"), "models")]
 
-# NOTE on InsightFace's buffalo_l pack (~300 MB): it is intentionally NOT
-# bundled here. FaceEngine.instance() (app/core/face_engine.py) downloads it
-# on first call via insightface's own model_zoo into ~/.insightface — this
-# is exactly what powers the "Downloading AI model weights" step of the
-# first-launch wizard. If you'd rather ship it in the installer instead of
-# downloading it, see the note in BUILD.md ("Bundling buffalo_l instead of
-# downloading it").
+# Optional: any .onnx placed in models/ (YuNet, the anti-spoofing models, even
+# the face models) ships inside the build and is used instead of downloading.
+datas += [(str(f), "models") for f in (PROJECT_ROOT / "models").glob("*.onnx")]
+
+# NOTE on the face models: they are NOT bundled by default. On first launch
+# app/core/face_models.py downloads only the files the chosen profile needs
+# (ArcFace ~175 MB + a detector, 0.3–17 MB), reusing any already present in
+# ~/.insightface/models from older versions. To ship them in the installer
+# instead, put the .onnx files in models/ before building (see above).
 
 a = Analysis(
     [str(PROJECT_ROOT / "app" / "sidecar_entry.py")],
@@ -110,7 +101,11 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["PySide6", "PyQt5", "PyQt6", "tkinter"],  # not needed by the sidecar
+    # Not needed by the sidecar. insightface and helpers only it used are
+    # excluded in case they are still installed in the build venv.
+    # (matplotlib stays: mediapipe imports it.)
+    excludes=["PySide6", "PyQt5", "PyQt6", "tkinter", "insightface", "skimage",
+              "albumentations", "sklearn"],
     noarchive=False,
 )
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import PresentiaLogo from './PresentiaLogo'
 import PerformanceSettings from './PerformanceSettings'
+import AccessibilitySettings from './AccessibilitySettings'
 
 export interface UpdateInfo {
   available: boolean
@@ -13,19 +14,20 @@ export interface UpdateInfo {
 }
 
 type Phase = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
-type Tab = 'appearance' | 'performance' | 'updates'
+type Tab = 'appearance' | 'performance' | 'accessibility' | 'updates'
 
 const TAB_KEY = 'presentia.settingsTab'
 const TABS: { id: Tab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'performance', label: 'Performance' },
-  { id: 'updates', label: 'Software Updates' },
+  { id: 'accessibility', label: 'Accessibility' },
+  { id: 'updates', label: 'Updates' },
 ]
 
 function loadTab(): Tab {
   try {
     const t = localStorage.getItem(TAB_KEY)
-    if (t === 'appearance' || t === 'performance' || t === 'updates') return t
+    if (t === 'appearance' || t === 'performance' || t === 'accessibility' || t === 'updates') return t
   } catch { /* storage unavailable */ }
   return 'appearance'
 }
@@ -201,6 +203,9 @@ export default function SettingsPanel({
 
         {/* ── Performance ─────────────────────────────────────── */}
         {tab === 'performance' && <PerformanceSettings />}
+
+        {/* ── Accessibility (check-in strictness) ──────────────── */}
+        {tab === 'accessibility' && <AccessibilitySettings />}
 
         {/* ── Software updates ─────────────────────────────────── */}
         {tab === 'updates' && (

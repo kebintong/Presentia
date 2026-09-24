@@ -19,6 +19,8 @@ const goApp = () => (window as any)['go']?.['main']?.['App']
 export default function App() {
   const [page, setPage] = useState<Page>('register')
   const [engineReady, setEngineReady] = useState(false)
+  // What first launch is doing (hardware check, model download progress).
+  const [engineMessage, setEngineMessage] = useState('')
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('presentia-theme')
     if (saved === 'dark' || saved === 'light') return saved
@@ -66,8 +68,10 @@ export default function App() {
           const data = await res.json()
           if (data.ready) {
             setEngineReady(true)
+            setEngineMessage('')
             return
           }
+          setEngineMessage(data.message || '')
         } catch {
           // sidecar still starting
         }
@@ -134,6 +138,7 @@ export default function App() {
           activePage={page}
           onNavigate={setPage}
           engineReady={engineReady}
+          engineMessage={engineMessage}
           theme={effectiveTheme}
           onToggleTheme={toggleTheme}
           version={version}
