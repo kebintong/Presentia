@@ -4,6 +4,7 @@
 .local-libs/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # ── Local data ───────────────────────────────────────────────────────
 # Never commit a real class's attendance records or exports.

@@ -1,285 +1,339 @@
-# Presentia — AI-Powered Virtual Classroom Attendance System
+# Presentia — Face-Verified Attendance for Online Classes
 
 [![CI](https://github.com/kebintong/Presentia/actions/workflows/ci.yml/badge.svg)](https://github.com/kebintong/Presentia/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/kebintong/Presentia?label=download)](https://github.com/kebintong/Presentia/releases/latest)
 [![Wails](https://img.shields.io/badge/Desktop-Wails_v2-df0000?logo=go&logoColor=white)](https://wails.io/)
 [![React](https://img.shields.io/badge/Frontend-React_19_+_TypeScript-61dafb?logo=react&logoColor=black)](https://react.dev/)
-[![Tailwind CSS](https://img.shields.io/badge/Styles-Tailwind_CSS_v4-38bdf8?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
-[![FastAPI](https://img.shields.io/badge/Sidecar-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![InsightFace](https://img.shields.io/badge/Face_Engine-InsightFace_Buffalo__L-orange)](https://github.com/deepinsight/insightface)
+[![FastAPI](https://img.shields.io/badge/Engine-Python_3.12_+_FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![ONNX Runtime](https://img.shields.io/badge/Face_models-ONNX_Runtime-blueviolet)](https://onnxruntime.ai/)
 [![MediaPipe](https://img.shields.io/badge/Liveness-MediaPipe-blue)](https://developers.google.com/mediapipe)
+[![Cloudflare](https://img.shields.io/badge/Registration_site-Cloudflare_Workers-f38020?logo=cloudflare&logoColor=white)](web/README.md)
 
-**Presentia** is a modern desktop application (Windows / Linux) that verifies student identity through **facial recognition + active liveness detection**, continuously monitors presence during virtual class sessions (Google Meet, Zoom, Microsoft Teams), and manages attendance records locally.
+**Presentia** is a desktop app for Windows (and Linux, built from source) that takes attendance in online classes.
+It verifies each student's identity with **face recognition and a live face check**, watches the Google Meet,
+Zoom or Teams window during class to see who is present, and keeps every record **on the teacher's computer**.
 
-Migrated from legacy PySide6 to a modern **Wails v2 + React 19 + TypeScript** architecture, Presentia pairs a frameless desktop experience with an asynchronous **Python FastAPI sidecar** powering computer vision and biometric verification.
-
----
-
-## Key Features
-
-- **Student Registration & Enrollment**
-  - **Interactive 5-Pose Webcam Guide**: Guided capture capturing five key poses (Straight, Left, Right, Up, Blink) with real-time pose feedback.
-  - **Batch Photo Import**: Import 1–5 profile pictures; the face embedding is previewed first and the student record is written once, on Save.
-  - **Live In-Call Enrollment**: Enroll unrecognized faces directly from active Google Meet sessions on the fly.
-  - **Student Directory**: Search, review, and manage enrolled students and their 512-d facial embeddings.
-
-- **Meet Monitor (Virtual Classroom Screen Capture)**
-  - **Target Area Selection**: Drag-and-select region picker over Google Meet, Zoom, or Teams video tiles.
-  - **Multi-Face Presence Tracking**: Continuously detects and matches all visible faces against the registered student roster.
-  - **Real-Time State Machine**: Tracks students across `Waiting` ➔ `Present` ➔ `Missing` states with configurable missing thresholds (e.g. 5 seconds).
-  - **Unknown Face Tagging**: Crops and lists unidentified faces with one-click enrollment.
-  - **Live Alert Feed**: Instant notifications when students disappear, leave their desks, or turn off cameras.
-  - **On-Demand Re-Verification**: Trigger interactive verification prompts for specific students during class.
-
-- **Webcam Session (Single-Student Mode)**
-  - **Interactive Liveness Challenge**: Anti-spoofing challenge requiring active eye blinks and head turns (yaw angles) powered by MediaPipe Face Landmarker.
-  - **Biometric Matching**: Verifies student identity against enrolled InsightFace embeddings using cosine similarity (threshold: `0.45`).
-  - **Continuous Presence Monitoring**: Continuous periodic re-identification via webcam with audit events logged.
-
-- **Attendance Reports & Analytics**
-  - **Session History**: Detailed audit trail per session including start/end timestamps, duration, and participant counts.
-  - **Attendance Record Table**: Logs student number, name, first sighting (`time_in`), departure (`time_out`), status, and alert frequency.
-  - **Manual Status Overrides**: Update statuses (`Present`, `Late`, `Absent`) directly in the UI.
-  - **Full-Class Reports**: Every registered student appears, including those never detected (shown as `Absent`), so statuses can be reviewed and overridden for the whole class.
-  - **Native CSV Export**: Export formatted attendance logs via native OS save dialogs (`SaveCSVToFile`), with a browser download fallback when the UI is run outside the desktop shell.
-
-- **Modern Desktop Experience**
-  - **Frameless UI**: Native custom titlebar (`TopBar`) with draggable region, window controls (minimize, maximize/restore, close), and engine status indicator.
-  - **Theme Switcher**: Dark/light theme support with persistent preferences, flat solid surfaces in both.
-  - **Automated Sidecar Management**: Go backend automatically launches, health-checks, and terminates the Python AI sidecar.
+Students can register in person with the teacher's webcam, or from their own phone or laptop on the
+**Presentia registration website** using the class join code.
 
 ---
 
-## Architecture Overview
+## Contents
+
+- [Download and install](#download-and-install)
+- [How it works](#how-it-works)
+- [Features](#features)
+- [Privacy and data](#privacy-and-data)
+- [Architecture](#architecture)
+- [Development](#development)
+- [Building the installer and releasing](#building-the-installer-and-releasing)
+- [Registration website](#registration-website)
+- [Project structure](#project-structure)
+- [Engine API](#engine-api)
+- [License](#license)
+
+---
+
+## Download and install
+
+1. Download **`PresentiaSetup.exe`** from the [latest release](https://github.com/kebintong/Presentia/releases/latest).
+2. Run it. Windows 10 or 11 (64-bit) is required. No Python, Node or Go is needed on the teacher's computer.
+3. On first launch Presentia checks the hardware and downloads its face models (about 180 MB, once).
+   The status pill in the top bar shows the progress.
+
+Presentia **updates itself**: when a new release is published, Settings → Updates offers to download and install it.
+
+---
+
+## How it works
+
+1. **Create a class** on the start screen (like Google Classroom). Each class gets a **join code**.
+2. **Register students**, in person (webcam or photos) or online (students use the join code on the website,
+   and you accept each one).
+3. **Start a session** on the Meeting Monitor and select the meeting window. Presentia recognises the students in
+   the video tiles and marks them present, late or missing as the class goes on.
+4. **Review attendance** on the Students and Reports pages, correct statuses if needed, and export to Excel.
+
+A student is stored **once** and can be in **many classes**. Registering for another class reuses their saved
+face data, and nobody can be in the same class twice.
+
+---
+
+## Features
+
+### Classes and students
+- **Class picker** start screen: new class, past classes, join codes, waiting-registration counts.
+- **Students page** per class: present / late / absent totals, attendance rate, join date, last seen,
+  low-attendance filter (below 80%), per-student history, edit or remove from the class.
+- **Add from other classes**: put existing students into a class without registering them again.
+- **Excel export** (`.xlsx`): summary, attendance per session and class info sheets.
+
+### Registration
+- **In person**: guided 5-pose webcam capture (straight, left, right, up, blink), or import 1–5 photos.
+- **Online**: students register on the website with the join code, a live face check (blink and head turns in a
+  random order) and three photos; the app downloads the registration, builds the face template **on your
+  computer**, and you **accept or reject** it. Turned on per class on the Student Registration page.
+- **One face, one student**: a face that is already registered can't become a second student. A returning
+  student is recognised (by number or by face) and simply added to the new class.
+- **Student number protection**: the website won't let a different device overwrite a registration that's waiting,
+  and the app won't accept someone else's face under a known student number.
+
+### Meeting Monitor (Google Meet, Zoom, Teams)
+- **Select a window or a screen area**; on Windows a selected window is captured directly, so it can be moved
+  or partly covered (minimising it pauses monitoring).
+- **Multi-face recognition** in all visible tiles, with each student tracked as *waiting → present → missing*.
+- **Unknown faces** are listed with one-click enrolment.
+- **Random action check** on a student's tile (blink, turn, look up) to catch photos or recordings; works for
+  students on phones too.
+- **Still-tile warnings** when a tile stops moving (a frozen video or a photo).
+- **Alerts** for students who leave the frame, turn their camera off, or don't match their own face.
+- **Bubble mode (Windows)**: a floating button with a dial, a tray icon, a stats chip and a resizable
+  **Live View**, all hidden from screen sharing and from the capture itself.
+
+### Single-student session
+- Webcam check-in with an **active liveness challenge** (MediaPipe Face Landmarker), optional photo / screen
+  replay detection (MiniFASNet), then continuous presence monitoring with periodic re-identification.
+
+### Reports
+- Session history with every enrolled student (including those never seen), manual **Present / Late / Absent**
+  overrides, event log, CSV export.
+
+### Settings
+- **Appearance**: light / dark theme, the experimental **Iridescent** design, and **animations** (with a switch to
+  turn them off; theme changes animate too).
+- **Performance**: device (CPU or GPU via DirectML) and profile (Auto / Low / Balanced / High), with a benchmark.
+- **Accessibility**: randomised challenges, photo / screen replay detection.
+- **Updates**: check, download and install new releases.
+- **Data**: what's stored on this computer, and **Delete all data**.
+- **Diagnostics**: a step-by-step connection check for the registration website, recent problems, and an optional
+  **diagnostic mode** that keeps an activity log and offers to send, copy or save a report when something fails
+  (turns itself off after 7 days).
+
+---
+
+## Privacy and data
+
+- **Attendance and face data stay on the teacher's computer**, in a local SQLite database
+  (`%APPDATA%\Presentia\attendance.db`). A face is stored as a 512-number template, not as a
+  photo.
+- **The registration website only holds registrations until the app collects them.** Photos are deleted as soon as
+  the app downloads them, and anything not collected is deleted after 14 days. No face template is ever computed
+  or stored on the website.
+- **Diagnostic reports are only sent when the user presses Send**, after seeing the full report (the Windows user
+  name is replaced with `<you>`). They are kept for 30 days.
+- **Settings → Data → Delete all data** removes every class, student and their face data, session and attendance
+  record, and rewrites the database file so deleted face data doesn't remain on disk.
+- The website's privacy notice refers to the Philippine **Data Privacy Act of 2012**. Have your school's data
+  protection officer review it before use.
+
+---
+
+## Architecture
 
 ```
-┌────────────────────────────────────────────────────────┐
-│                   Presentia Desktop                    │
-│                                                        │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │      Frontend: React 19 + TypeScript + Vite      │  │
-│  │   Tailwind CSS v4 • Flat solid-surface UI        │  │
-│  │   Pages: Register, Meet Monitor, Session, Reports│  │
-│  └────────────────────────┬─────────────────────────┘  │
-│                           │ Wails Runtime Bindings     │
-│                           │ (Native Dialogs & Window)  │
-│  ┌────────────────────────▼─────────────────────────┐  │
-│  │             Wails v2 Desktop Shell (Go)          │  │
-│  │  - Frameless Window Management                   │  │
-│  │  - Sidecar Process Supervisor (Startup/Shutdown) │  │
-│  │  - Native File & Save Dialogs                    │  │
-│  └────────────────────────┬─────────────────────────┘  │
-└───────────────────────────┼────────────────────────────┘
-                            │ REST / WebSocket (Port 7788)
-┌───────────────────────────▼────────────────────────────┐
-│         Python FastAPI AI Sidecar (Localhost)          │
-│                                                        │
-│  ┌──────────────────────┐    ┌──────────────────────┐  │
-│  │ InsightFace Buffalo_L│    │ MediaPipe Landmarker │  │
-│  │  Detection & Embed   │    │  Liveness Challenges │  │
-│  └──────────────────────┘    └──────────────────────┘  │
-│  ┌──────────────────────┐    ┌──────────────────────┐  │
-│  │  MSS Screen Capture  │    │  OpenCV Video Stream │  │
-│  └──────────────────────┘    └──────────────────────┘  │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │       SQLite Database (attendance.db)            │  │
-│  └──────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────┘
+┌─────────────────────────── Teacher's computer ───────────────────────────┐
+│                                                                          │
+│  ┌────────────────────────────────────────────────────────────────────┐  │
+│  │  Frontend: React 19 + TypeScript + Vite (Tailwind CSS v4)          │  │
+│  │  Classes · Student Registration · Students · Meeting Monitor ·     │  │
+│  │  Session · Reports · Settings                                      │  │
+│  └──────────────────────────────┬─────────────────────────────────────┘  │
+│                                 │ Wails bindings (dialogs, window)       │
+│  ┌──────────────────────────────▼─────────────────────────────────────┐  │
+│  │  Desktop shell: Wails v2 (Go)                                      │  │
+│  │  frameless window · engine supervisor · auto-update · save dialogs │  │
+│  │  bubble, tray, Live View, window capture helpers (Windows)         │  │
+│  └──────────────────────────────┬─────────────────────────────────────┘  │
+│                                 │ REST + WebSocket, 127.0.0.1:7788       │
+│  ┌──────────────────────────────▼─────────────────────────────────────┐  │
+│  │  Engine: Python 3.12 + FastAPI (frozen with PyInstaller)           │  │
+│  │  SCRFD / YuNet detection + ArcFace embeddings (ONNX Runtime)       │  │
+│  │  MediaPipe liveness · MiniFASNet replay check · MSS / PrintWindow  │  │
+│  │  SQLite attendance.db                                              │  │
+│  └──────────────────────────────┬─────────────────────────────────────┘  │
+└─────────────────────────────────┼────────────────────────────────────────┘
+                                  │ HTTPS (only for online registration
+                                  │ and diagnostic reports)
+┌─────────────────────────────────▼────────────────────────────────────────┐
+│  Registration website: Cloudflare Workers + D1 (free plan) — web/        │
+│  join-code page · in-browser face check · waiting registrations · reports│
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## Prerequisites
-
-Before running or building Presentia, ensure your environment has:
-
-1. **Go**: Version `1.21` or higher (installed and on `PATH`).
-2. **Wails CLI v2**:
-   ```bash
-   go install github.com/wailsapp/wails/v2/cmd/wails@latest
-   ```
-3. **Node.js & npm**: Node.js `18.x` or higher.
-4. **Python**: Python `3.10` – `3.12`.
-5. **C++ Build Tools**:
-   - **Windows**: Microsoft Visual Studio C++ Build Tools (required by Go / Wails on Windows).
-   - **Linux**: `gcc`, `pkg-config`, `libgtk-3-dev`, `libwebkit2gtk-4.0-dev` (or `4.1`).
-6. **Webcam & Screen Capture Permissions**: A working webcam and display capture permissions.
+Face models: SCRFD (10g / 2.5g) or YuNet for detection, and ArcFace `w600k_r50` for recognition, run directly
+with ONNX Runtime (the `insightface` package is not used at run time). Two faces count as the same person at a
+cosine similarity of **0.45** or more.
 
 ---
 
-## Installation & Setup
+## Development
 
-### 1. Clone Repository & Setup Python Virtual Environment
+### Prerequisites
+
+| Tool | Version |
+|---|---|
+| Python | 3.12 |
+| Go | 1.25 (see `presentia-desktop/go.mod`) |
+| Wails CLI | v2 (`go install github.com/wailsapp/wails/v2/cmd/wails@latest`) |
+| Node.js | 20.19+ or 22 |
+| Windows | WebView2 runtime (built into Windows 11) |
+| Linux | `gcc`, `pkg-config`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev` |
+
+### Setup
 
 ```bash
-git clone https://github.com/your-repo/Presentia.git
+git clone https://github.com/kebintong/Presentia.git
 cd Presentia
 
-# Create and activate Python virtual environment
 python -m venv .venv
-
-# Windows (Command Prompt / PowerShell)
-.venv\Scripts\activate
-
-# Linux / macOS
+# Windows PowerShell (if scripts are blocked: Set-ExecutionPolicy -Scope Process Bypass)
+.venv\Scripts\Activate.ps1
+# Linux
 source .venv/bin/activate
 
-# Install Python sidecar dependencies
 pip install -r requirements.txt
-```
 
-> **Note**: On the first launch, InsightFace automatically downloads the `buffalo_l` model pack (~300 MB) into `~/.insightface`, and MediaPipe's `face_landmarker.task` is loaded from `models/`. Ensure an active internet connection on first startup.
-
-### 2. Install Frontend Dependencies
-
-```bash
 cd presentia-desktop/frontend
 npm install
 cd ../..
 ```
 
----
-
-## Running in Development Mode
-
-You can run Presentia using either the unified **Wails dev workflow** or by running the components independently.
-
-### Option A: Unified Wails Dev (Recommended)
-
-From the `presentia-desktop` directory, launch the Wails development server:
+### Run
 
 ```bash
 cd presentia-desktop
 wails dev
 ```
 
-What happens automatically:
-1. Wails boots and invokes `app.go`.
-2. `app.go` spawns the Python sidecar on `http://127.0.0.1:7788` using `.venv` or your active Python environment.
-3. Wails launches Vite in live watch mode with Hot Module Replacement (HMR).
-4. The native desktop application window opens with live reload enabled.
+Wails starts the Vite dev server with hot reload, and the Go shell starts the Python engine on
+`http://127.0.0.1:7788` from `.venv`. Like the installed app, it keeps its data in `%APPDATA%\Presentia`
+(`~/.config/Presentia` on Linux). Running the engine on its own (below) uses `attendance.db` in the project folder.
 
-### Option B: Standalone Sidecar + Frontend (Browser Testing)
-
-If you prefer testing the UI in a standard web browser:
-
-1. **Start the Python FastAPI sidecar:**
-   ```bash
-   python -m uvicorn app.sidecar:app --host 127.0.0.1 --port 7788 --reload
-   ```
-2. **Start the Vite frontend dev server:**
-   ```bash
-   cd presentia-desktop/frontend
-   npm run dev
-   ```
-3. Open `http://localhost:5173` in your browser.
-
----
-
-## Building for Production
-
-To produce an optimized, standalone desktop application bundle:
+To work on the screens in a normal browser instead:
 
 ```bash
-cd presentia-desktop
-wails build
+python -m uvicorn app.sidecar:app --host 127.0.0.1 --port 7788 --reload
+cd presentia-desktop/frontend && npm run dev      # http://localhost:5173
 ```
 
-The compiled binary and package assets will be generated in:
-```
-presentia-desktop/build/bin/
+### Tests and checks
+
+```bash
+pip install pytest httpx openpyxl
+python -m pytest tests -q
 ```
 
-- **Windows**: `presentia-desktop/build/bin/Presentia.exe`
-- **Linux**: `presentia-desktop/build/bin/Presentia`
+The tests cover the database and its upgrades from older versions, classes and attendance totals, the Excel export,
+duplicate-face and student-number rules, diagnostic mode and reports, Delete all data, the HTTPS certificate
+fallback (needs `openssl`, so it is skipped on Windows), and the PyInstaller build list.
+
+Every push runs [GitHub Actions](.github/workflows/ci.yml): the Python tests, the frontend type check and build,
+a Windows build of the desktop shell, and a dry-run deploy of the website. **Release only from a commit with a
+green check.**
 
 ---
 
-## Online Registration Website
+## Building the installer and releasing
 
-Students can register themselves for a class from their own phone or laptop with the class **join code**:
-they enter their details, pass a short live face check in the browser, and the instructor accepts them in
-the app (Students page → **Online registration**). The website lives in [`web/`](web/) and runs on
-Cloudflare's free plan; face templates are only ever built on the instructor's computer, and photos are
-deleted from the website once collected (or after 14 days). Setup takes about ten minutes — see
+Full steps are in [`build/BUILD.md`](build/BUILD.md). In short, on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build\set-version.ps1 1.5.3   # update.go, installer.iss, wails.json
+cd presentia-desktop; wails build; cd ..
+pyinstaller build\presentia-sidecar.spec --noconfirm --clean
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build\installer.iss    # → build\output\PresentiaSetup.exe
+git tag v1.5.3; git push origin v1.5.3
+```
+
+Then create a GitHub release for the tag and attach `PresentiaSetup.exe`. Installed copies check
+`releases/latest` and offer the update; the release must be a normal release (not a draft or pre-release), and
+the repository must stay public for the update check to see it.
+
+---
+
+## Registration website
+
+The website in [`web/`](web/) runs on Cloudflare's free plan (Workers + D1, no payment card needed). Students enter
+the class join code, their student number and name, agree to the privacy notice, and pass a live face check in the
+browser. It is deployed automatically from GitHub (Workers Builds, root directory `web`) whenever `main` changes.
+
+The default address is set in `app/data/cloud.py` (`DEFAULT_URL`, and `REPORTS_URL` for diagnostic reports).
+Setup, local testing, reading diagnostic reports and the optional GitHub-issue integration are described in
 [`web/README.md`](web/README.md).
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 Presentia/
-├── app/                              # Python AI & Computer Vision Sidecar
+├── app/                                # Python engine ("sidecar")
+│   ├── sidecar.py                      # FastAPI REST + WebSocket server (port 7788)
+│   ├── sidecar_entry.py                # Entry point for the frozen build
 │   ├── core/
-│   │   ├── camera.py                 # Threaded OpenCV webcam capture
-│   │   ├── face_engine.py            # InsightFace Buffalo_L detection & 512-d embeddings
-│   │   ├── liveness.py               # MediaPipe face landmarks & blink/yaw challenge logic
-│   │   └── monitor.py                # Presence tracking state machine
+│   │   ├── face_models.py              # SCRFD / YuNet / ArcFace on ONNX Runtime, model downloads
+│   │   ├── face_engine.py              # Detection + recognition, matching (threshold 0.45)
+│   │   ├── liveness.py                 # MediaPipe landmarks, blink / turn / look-up challenges
+│   │   ├── antispoof.py                # MiniFASNet photo / screen replay check
+│   │   ├── tile_challenge.py           # Random action check on a meeting tile
+│   │   ├── stillness.py                # Still-tile (frozen video / photo) warnings
+│   │   ├── roster_monitor.py           # Waiting → present → missing per student
+│   │   ├── monitor.py                  # Single-student presence monitoring
+│   │   ├── screen.py, tile_tracker.py  # Screen / window capture, tile tracking
+│   │   ├── enrollment.py, camera.py    # Guided 5-pose enrolment, webcam capture
+│   │   ├── perf.py                     # Devices, profiles, benchmark
+│   │   └── diag.py                     # Recent problems, diagnostic mode, activity log
 │   ├── data/
-│   │   └── db.py                     # SQLite schema, student profiles, attendance logs
-│   ├── sidecar.py                    # FastAPI REST & WebSocket server (port 7788)
-│   └── main.py                       # Legacy PySide6 launcher
-├── models/                           # MediaPipe face landmarker binary tasks
-├── presentia-desktop/                # Wails Desktop Shell
-│   ├── app.go                        # Go runtime: sidecar supervisor & native OS bindings
-│   ├── main.go                       # Wails entrypoint & window configuration
-│   ├── wails.json                    # Wails application config
-│   ├── go.mod / go.sum               # Go modules
-│   ├── build/                        # App icons, Windows manifests, build artifacts
-│   └── frontend/                     # React + TypeScript Web Application
-│       ├── package.json              # Dependencies: React 19, TypeScript, Tailwind v4
-│       ├── vite.config.ts            # Vite build configuration
-│       ├── src/
-│       │   ├── App.tsx               # Main layout, theme management, sidecar health poll
-│       │   ├── style.css             # Flat theme tokens & Tailwind styles
-│       │   ├── components/
-│       │   │   ├── TopBar.tsx        # Frameless window controls, status, theme toggle
-│       │   │   ├── Sidebar.tsx       # Navigation sidebar with status badges
-│       │   │   ├── VideoCanvas.tsx   # Video renderer with dynamic face bounding boxes
-│       │   │   ├── RosterList.tsx    # Live student attendance roster
-│       │   │   ├── AlertList.tsx     # Real-time alert notifications
-│       │   │   └── StatusBanner.tsx  # Verification status message banners
-│       │   └── pages/
-│       │       ├── RegisterPage.tsx  # 5-pose webcam capture & photo import
-│       │       ├── MeetPage.tsx      # Google Meet screen monitor & instant enrollment
-│       │       ├── SessionPage.tsx   # Single-student liveness & webcam monitoring
-│       │       └── ReportsPage.tsx   # Session review, status overrides & CSV export
-├── requirements.txt                  # Python dependencies
-└── README.md                         # Project documentation
+│   │   ├── db.py                       # SQLite schema + versioned migrations
+│   │   ├── cloud.py                    # Registration website + reports (HTTPS with certificate fallback)
+│   │   ├── export.py, xlsx.py          # Excel export (no extra dependencies)
+│   └── ui/, main.py                    # Legacy PySide6 interface (kept for reference)
+├── presentia-desktop/                  # Wails desktop app
+│   ├── main.go, app.go                 # Window, engine supervisor, save dialogs
+│   ├── update.go                       # Auto-update from GitHub releases (AppVersion lives here)
+│   ├── bubble_*.go, tray_win.go,
+│   │   live_win.go, pip_win.go         # Bubble mode, tray, stats chip, Live View (Windows)
+│   └── frontend/src/
+│       ├── App.tsx, main.tsx           # Layout, theme, animations, diagnostics hook
+│       ├── diagnostics.ts              # Problem capture + report building
+│       ├── themeTransition.ts          # Animated theme switch
+│       ├── pages/                      # ClassPicker, Register, Students, Meet, Session, Reports
+│       └── components/                 # TopBar, Sidebar, SettingsPanel and its tabs,
+│                                       # OnlineRegistration, ProblemPrompt, ReportDialog, …
+├── web/                                # Registration website (Cloudflare Worker + D1)
+├── build/                              # PyInstaller spec, Inno Setup script, set-version.ps1, BUILD.md
+├── tests/                              # pytest suite
+├── tools/verify_models.py              # Compare embeddings with the reference implementation
+├── models/face_landmarker.task         # MediaPipe model (bundled)
+├── .github/workflows/ci.yml            # Automatic checks
+└── requirements.txt
 ```
 
 ---
 
-## API & Sidecar Endpoints
+## Engine API
 
-The Python sidecar serves REST and WebSocket endpoints on `http://127.0.0.1:7788`:
+The engine listens on `http://127.0.0.1:7788` and is only reachable from the same computer. Main groups
+(see `app/sidecar.py` for every endpoint):
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/engine/status` | Model loading readiness check |
-| `GET` | `/api/screen/screenshot` | Primary-screen JPEG for the in-app region picker |
-| `GET` | `/api/students` | List all registered students |
-| `POST` | `/api/students` | Create new student profile from a face embedding |
-| `DELETE` | `/api/students/{id}` | Remove a student profile |
-| `GET` | `/api/students/{id}/embedding` | Base64 face embedding for one student |
-| `POST` | `/api/enroll/photos/preview` | Extract an embedding from photos **without** saving |
-| `POST` | `/api/enroll/photos` | Extract an embedding from photos and save the student |
-| `GET` | `/api/sessions` | Fetch past attendance sessions |
-| `POST` | `/api/sessions` | Create a new session |
-| `PUT` | `/api/sessions/{id}/end` | End a session and stamp time-outs |
-| `GET` | `/api/sessions/{id}/report` | Attendance for **every** registered student |
-| `GET` | `/api/sessions/{id}/events` | Full presence/audit event log for a session |
-| `POST` | `/api/attendance/time-in` | Record a verified arrival |
-| `POST` | `/api/attendance/time-out` | Record a departure |
-| `PATCH` | `/api/attendance/{id}/status` | Update status on an existing attendance row |
-| `PATCH` | `/api/sessions/{id}/attendance/status` | Set a student's status, creating the row if they were never seen |
-| `POST` | `/api/sessions/{id}/log-event` | Append a presence/audit event |
-| `GET` | `/api/sessions/{id}/export-csv` | Export session attendance as CSV |
-| `WS` | `/ws/camera` | Webcam stream: guided enrollment, liveness, recognition, presence monitoring |
-| `WS` | `/ws/screen` | Screen-region capture: multi-face recognition, live enrollment, on-demand re-verification |
+| Area | Endpoints |
+|---|---|
+| Engine | `GET /api/engine/status`, `GET/PUT /api/perf`, `POST /api/perf/benchmark`, `GET/PUT /api/checks` |
+| Classes | `GET/POST /api/classes`, `GET/PATCH/DELETE /api/classes/{id}`, `POST /api/classes/{id}/open`, `POST /api/classes/{id}/join-code`, `GET /api/classes/{id}/available-students` |
+| Students | `GET/POST /api/students`, `PATCH/DELETE /api/students/{id}`, `PUT/DELETE /api/classes/{id}/students/{sid}`, `GET /api/classes/{id}/students/summary`, `GET /api/classes/{id}/students/{sid}/history`, `GET /api/classes/{id}/export.xlsx` |
+| Enrolment | `POST /api/enroll/photos/preview`, `POST /api/enroll/photos`, `WS /ws/camera` |
+| Online registration | `GET/PUT /api/cloud`, `PUT /api/classes/{id}/online`, `POST /api/classes/{id}/sync`, `GET /api/classes/{id}/pending`, `POST /api/pending/{id}/approve`, `DELETE /api/pending/{id}` |
+| Sessions and attendance | `GET/POST /api/sessions`, `PUT /api/sessions/{id}/end`, `GET /api/sessions/{id}/report`, `GET /api/sessions/{id}/events`, `PATCH /api/sessions/{id}/attendance/status`, `GET /api/sessions/{id}/export-csv` |
+| Meeting monitor | `WS /ws/screen`, `GET /api/screen/screenshot`, `GET /api/monitor/live`, `GET /api/monitor/frame` |
+| Diagnostics | `GET /api/diagnostics`, `GET/PUT /api/diagnostics/mode`, `POST /api/diagnostics/event`, `GET/DELETE /api/diagnostics/log`, `POST /api/diagnostics/send` |
+| Data | `GET /api/data/summary`, `POST /api/data/delete-all` |
 
 ---
 
 ## License
 
-This project is licensed under the MIT License — see the LICENSE file for details.
+This project is licensed under the MIT License.
+
+The pretrained InsightFace face models that Presentia downloads (SCRFD, ArcFace `w600k_r50`) are released by
+InsightFace for **non-commercial research use only**. Commercial use needs a licence from InsightFace or different
+models. YuNet (OpenCV Zoo) and MiniFASNet are under permissive licences.
