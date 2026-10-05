@@ -4,6 +4,7 @@ import { useFrameFeed, type Frame } from '../components/frameFeed'
 import AlertList, { makeAlert } from '../components/AlertList'
 import StatusBanner from '../components/StatusBanner'
 import CameraViewControls, { useCameraView } from '../components/CameraViewControls'
+import { ClassInfo } from '../classes'
 
 const API = 'http://127.0.0.1:7788'
 const WS  = 'ws://127.0.0.1:7788'
@@ -27,7 +28,7 @@ interface AlertItem {
 
 type Phase = 'idle' | 'waiting' | 'liveness' | 'recognize' | 'monitoring'
 
-export default function SessionPage() {
+export default function SessionPage({ classInfo }: { classInfo: ClassInfo }) {
   const [sessionName, setSessionName]       = useState('')
   const [students, setStudents]             = useState<Student[]>([])
   const [selectedIdx, setSelectedIdx]       = useState(0)
@@ -74,7 +75,7 @@ export default function SessionPage() {
 
   const loadStudents = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/students`)
+      const res = await fetch(`${API}/api/students?class_id=${classInfo.id}`)
       if (res.ok) {
         const data: Student[] = await res.json()
         setStudents(data)
@@ -82,7 +83,7 @@ export default function SessionPage() {
     } catch {
       // Server starting
     }
-  }, [])
+  }, [classInfo.id])
 
   useEffect(() => {
     loadStudents()
@@ -95,7 +96,7 @@ export default function SessionPage() {
     // even when students existed.
     let roster: Student[] = students
     try {
-      const res = await fetch(`${API}/api/students`)
+      const res = await fetch(`${API}/api/students?class_id=${classInfo.id}`)
       if (res.ok) {
         roster = await res.json()
         setStudents(roster)
@@ -104,7 +105,7 @@ export default function SessionPage() {
       // Fall back to whatever is already loaded.
     }
     if (roster.length === 0) {
-      setBannerState('Register at least one student first.', 'error')
+      setBannerState(`Register at least one student in ${classInfo.name} first.`, 'error')
       return
     }
     const name = sessionName.trim() || `Session ${new Date().toLocaleString()}`
@@ -112,8 +113,9 @@ export default function SessionPage() {
       const res = await fetch(`${API}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, class_id: classInfo.id }),
       })
+      if (!res.ok) throw new Error(`could not start the session (HTTP ${res.status})`)
       const { id } = await res.json()
       setSessionId(id)
       setPhase('waiting')

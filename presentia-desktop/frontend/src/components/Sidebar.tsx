@@ -1,6 +1,6 @@
 import React from 'react'
 
-type Page = 'register' | 'meet' | 'session' | 'reports'
+type Page = 'register' | 'students' | 'meet' | 'session' | 'reports'
 
 interface SidebarProps {
   active: Page
@@ -9,6 +9,8 @@ interface SidebarProps {
   onOpenSettings?: () => void
   /** Shows a red dot on the settings gear when an update is waiting. */
   updateAvailable?: boolean
+  /** False on the start screen: the pages need a class to work on. */
+  showNav?: boolean
 }
 
 interface NavItem {
@@ -27,6 +29,18 @@ const NAV_ITEMS: NavItem[] = [
         <circle cx="9" cy="7" r="4" />
         <line x1="19" y1="8" x2="19" y2="14" />
         <line x1="22" y1="11" x2="16" y2="11" />
+      </svg>
+    ),
+  },
+  {
+    id: 'students',
+    label: 'Students',
+    icon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
       </svg>
     ),
   },
@@ -69,13 +83,13 @@ const NAV_ITEMS: NavItem[] = [
 ]
 
 export default function Sidebar({
-  active, onNavigate, engineReady, onOpenSettings, updateAvailable,
+  active, onNavigate, engineReady, onOpenSettings, updateAvailable, showNav = true,
 }: SidebarProps) {
   return (
     <aside className="launcher-sidebar">
       {/* Navigation Icons Stack */}
       <div className="sidebar-nav-stack">
-        {NAV_ITEMS.map((item) => {
+        {showNav && NAV_ITEMS.map((item) => {
           const isActive = active === item.id
           return (
             <button

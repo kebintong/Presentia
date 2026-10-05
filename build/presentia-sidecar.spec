@@ -66,6 +66,9 @@ hiddenimports += [
     "app",
     "app.sidecar",
     "app.data.db",
+    "app.data.cloud",
+    "app.data.export",
+    "app.data.xlsx",
     "app.core.camera",
     "app.core.enrollment",
     "app.core.face_engine",
@@ -77,6 +80,8 @@ hiddenimports += [
     "app.core.roster_monitor",
     "app.core.screen",
     "app.core.tile_tracker",
+    "app.core.tile_challenge",
+    "app.core.stillness",
     "app.core.v4l2_reader",
 ]
 

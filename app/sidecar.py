@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from app.data import db
+from app.data import cloud, db
 from app.core import perf
 from app.core.face_engine import FaceEngine
 
@@ -106,10 +106,35 @@ class StudentCreate(BaseModel):
     student_no: str
     name: str
     embedding_b64: str  # base64-encoded float32 bytes
+    class_id: int | None = None  # also put the student on this class's roster
 
 
 class SessionCreate(BaseModel):
     name: str
+    class_id: int | None = None
+
+
+class ClassCreate(BaseModel):
+    name: str
+    section: str = ""
+
+
+class ClassUpdate(BaseModel):
+    name: str | None = None
+    section: str | None = None
+
+
+class StudentUpdate(BaseModel):
+    student_no: str | None = None
+    name: str | None = None
+
+
+class CloudSettings(BaseModel):
+    url: str
+
+
+class OnlineToggle(BaseModel):
+    enabled: bool
 
 
 class StatusUpdate(BaseModel):
@@ -268,22 +293,342 @@ async def screen_screenshot() -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+# ── Classes ───────────────────────────────────────────────────────────────────
+#
+# What the instructor picks on the start screen. Students and sessions belong
+# to a class; a student can be on several rosters with one set of face data.
+
+_CLASS_NAME_MAX = 80
+
+
+def _require_class(class_id: int) -> dict:
+    cls = db.get_class(class_id)
+    if cls is None:
+        raise HTTPException(status_code=404, detail="Class not found")
+    return cls
+
+
+def _clean_class_name(name: str) -> str:
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Class name is required")
+    return name[:_CLASS_NAME_MAX]
+
+
+@app.get("/api/classes")
+async def list_classes() -> list[dict]:
+    return db.list_classes()
+
+
+@app.post("/api/classes", status_code=201)
+async def create_class(body: ClassCreate) -> dict:
+    return db.create_class(_clean_class_name(body.name), body.section.strip()[:_CLASS_NAME_MAX])
+
+
+@app.get("/api/classes/{class_id}")
+async def get_class(class_id: int) -> dict:
+    return _require_class(class_id)
+
+
+@app.patch("/api/classes/{class_id}")
+async def update_class(class_id: int, body: ClassUpdate) -> dict:
+    _require_class(class_id)
+    db.update_class(
+        class_id,
+        name=_clean_class_name(body.name) if body.name is not None else None,
+        section=body.section.strip()[:_CLASS_NAME_MAX] if body.section is not None else None,
+    )
+    cls = _require_class(class_id)
+    if cls["online"]:
+        # Students see the new name on the website. Best effort: a rename
+        # must not fail because the internet is down.
+        try:
+            await asyncio.to_thread(cloud.publish, cls)
+        except cloud.CloudError:
+            pass
+    return cls
+
+
+@app.post("/api/classes/{class_id}/open")
+async def open_class(class_id: int) -> dict:
+    """Called when the instructor enters a class from the start screen."""
+    _require_class(class_id)
+    db.touch_class(class_id)
+    return _require_class(class_id)
+
+
+@app.post("/api/classes/{class_id}/join-code")
+async def regenerate_join_code(class_id: int) -> dict:
+    """Issue a new join code; the old one stops working."""
+    cls = _require_class(class_id)
+    if cls["online"]:
+        try:
+            await asyncio.to_thread(cloud.unpublish, cls["join_code"])
+        except cloud.CloudError as exc:
+            raise HTTPException(status_code=502, detail=exc.message) from exc
+    code = db.regenerate_join_code(class_id)
+    if cls["online"]:
+        try:
+            code = await asyncio.to_thread(cloud.publish, _require_class(class_id))
+        except cloud.CloudError as exc:
+            db.set_class_online(class_id, False)
+            raise HTTPException(status_code=502, detail=exc.message) from exc
+    return {"join_code": code}
+
+
+@app.delete("/api/classes/{class_id}")
+async def delete_class(class_id: int) -> dict:
+    cls = _require_class(class_id)
+    if cls["online"]:
+        # Remove it from the website too, with anything still waiting there.
+        try:
+            await asyncio.to_thread(cloud.unpublish, cls["join_code"])
+        except cloud.CloudError:
+            pass  # unreachable: the website deletes uncollected data after 14 days anyway
+    return {"students_removed": db.delete_class(class_id)}
+
+
+# ── Online registration (web/ — students register with the join code) ───────
+
+SAME_PERSON = 0.45  # photos of one registration must match each other this well
+
+
+def _embed_registration(images: list[np.ndarray]) -> tuple[np.ndarray | None, int, str]:
+    """Face template from a website registration's photos, or a reason why not."""
+    engine = FaceEngine.instance()
+    embeddings = []
+    for img in images[:5]:
+        face = engine.largest_face(img)
+        if face is None or float(face.det_score) < 0.55:
+            continue
+        embeddings.append(np.asarray(face.normed_embedding, dtype=np.float32))
+    if not embeddings:
+        return None, 0, "No clear face was found in the photos."
+    if len(embeddings) > 1:
+        worst = min(float(a @ b) for i, a in enumerate(embeddings) for b in embeddings[i + 1:])
+        if worst < SAME_PERSON:
+            return None, len(embeddings), "The photos do not all show the same person."
+    mean = np.mean(np.stack(embeddings), axis=0)
+    mean /= np.linalg.norm(mean)
+    return mean.astype(np.float32), len(embeddings), ""
+
+
+def _cloud_error(exc: "cloud.CloudError") -> HTTPException:
+    return HTTPException(status_code=502, detail=exc.message)
+
+
+@app.get("/api/cloud")
+async def cloud_settings() -> dict:
+    url = cloud.server_url()
+    return {"url": url, "configured": bool(url), "default_url": cloud.DEFAULT_URL}
+
+
+@app.put("/api/cloud")
+async def update_cloud_settings(body: CloudSettings) -> dict:
+    try:
+        url = cloud.set_server_url(body.url)
+    except cloud.CloudError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    if url:
+        try:  # check the address really is a Presentia site
+            await asyncio.to_thread(cloud._request, "GET", "/api/health", None, False)  # noqa: SLF001
+        except cloud.CloudError as exc:
+            raise HTTPException(status_code=502, detail=exc.message) from exc
+    return {"url": url, "configured": bool(url), "default_url": cloud.DEFAULT_URL}
+
+
+@app.put("/api/classes/{class_id}/online")
+async def set_class_online(class_id: int, body: OnlineToggle) -> dict:
+    """Turn online registration on (publish the class on the website) or off
+    (remove it, with anything not yet collected)."""
+    cls = _require_class(class_id)
+    try:
+        if body.enabled:
+            await asyncio.to_thread(cloud.publish, cls)
+            db.set_class_online(class_id, True)
+        else:
+            if cls["online"]:
+                await asyncio.to_thread(cloud.unpublish, cls["join_code"])
+            db.set_class_online(class_id, False)
+    except cloud.CloudError as exc:
+        raise _cloud_error(exc) from exc
+    cls = _require_class(class_id)
+    return {**cls, "share_link": cloud.share_link(cls["join_code"]) if cls["online"] else ""}
+
+
+@app.post("/api/classes/{class_id}/sync")
+async def sync_class(class_id: int) -> dict:
+    """Download new registrations from the website."""
+    cls = _require_class(class_id)
+    if not cls["online"]:
+        return {"received": 0, "pending": cls["pending_count"]}
+    if not FaceEngine.is_ready():
+        raise HTTPException(status_code=503, detail="AI models still loading")
+    try:
+        received = await asyncio.to_thread(cloud.pull, cls, _embed_registration)
+    except cloud.CloudError as exc:
+        raise _cloud_error(exc) from exc
+    return {"received": received, "pending": _require_class(class_id)["pending_count"]}
+
+
+@app.get("/api/classes/{class_id}/pending")
+async def class_pending(class_id: int) -> list[dict]:
+    _require_class(class_id)
+    out = []
+    for p in db.list_pending(class_id):
+        photo = p.pop("photo_jpeg")
+        p["photo_b64"] = base64.b64encode(photo).decode() if photo else ""
+        p["has_face"] = bool(p["has_face"])
+        p["existing_in_class"] = bool(p["existing_in_class"])
+        out.append(p)
+    return out
+
+
+@app.post("/api/pending/{pending_id}/approve")
+async def approve_pending(pending_id: int) -> dict:
+    """Accept a website registration into its class.
+
+    If the student number is already registered (another class, or in person
+    earlier), that student is added to the class with the face data already
+    on file; nobody is stored twice.
+    """
+    p = db.get_pending(pending_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="Registration not found")
+    existing = db.find_student_by_no(p["student_no"])
+    if existing is not None:
+        db.add_student_to_class(p["class_id"], existing["id"])
+        db.delete_pending(pending_id)
+        return {"result": "linked", "student_id": existing["id"], "name": existing["name"]}
+    if p["embedding"] is None:
+        raise HTTPException(
+            status_code=422,
+            detail=p["problem"] or "No usable face in this registration. Reject it and ask the "
+                                   "student to register again.",
+        )
+    emb = np.frombuffer(p["embedding"], dtype=np.float32)
+    student_id = db.add_student(p["student_no"], p["name"], emb, p["class_id"])
+    db.delete_pending(pending_id)
+    return {"result": "added", "student_id": student_id, "name": p["name"]}
+
+
+@app.delete("/api/pending/{pending_id}", status_code=204)
+async def reject_pending(pending_id: int) -> None:
+    db.delete_pending(pending_id)
+
+
+@app.get("/api/classes/{class_id}/available-students")
+async def available_students(class_id: int) -> list[dict]:
+    """Students from the instructor's other classes who can be added here
+    without registering their face again."""
+    _require_class(class_id)
+    return db.list_students_outside(class_id)
+
+
+@app.get("/api/classes/{class_id}/students/summary")
+async def class_student_summary(class_id: int) -> list[dict]:
+    """Students page: each student's present / late / absent totals."""
+    _require_class(class_id)
+    return db.class_attendance_summary(class_id)
+
+
+@app.get("/api/classes/{class_id}/students/{student_id}/history")
+async def class_student_history(class_id: int, student_id: int) -> list[dict]:
+    _require_class(class_id)
+    return db.student_history(class_id, student_id)
+
+
+@app.get("/api/classes/{class_id}/export.xlsx")
+async def export_class_xlsx(class_id: int) -> Response:
+    """Excel workbook: Summary, Attendance (one column per session) and
+    Class Info sheets."""
+    from urllib.parse import quote
+
+    from app.data.export import class_workbook
+
+    result = class_workbook(class_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Class not found")
+    filename, data = result
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+@app.put("/api/classes/{class_id}/students/{student_id}", status_code=204)
+async def add_student_to_class(class_id: int, student_id: int) -> None:
+    _require_class(class_id)
+    if db.get_student_embedding(student_id) is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+    db.add_student_to_class(class_id, student_id)
+
+
+@app.delete("/api/classes/{class_id}/students/{student_id}")
+async def remove_student_from_class(class_id: int, student_id: int) -> dict:
+    """Remove from this roster. Face data is deleted only when the student is
+    in no other class (`deleted` tells which happened)."""
+    _require_class(class_id)
+    return {"deleted": db.remove_student_from_class(class_id, student_id)}
+
+
 # ── Students ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/students")
-async def list_students() -> list[dict]:
-    return db.list_students()
+async def list_students(class_id: int | None = None) -> list[dict]:
+    return db.list_students(class_id)
+
+
+def _student_exists_error(existing: dict) -> HTTPException:
+    """409 that lets the UI offer to reuse the student already on file."""
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "student_exists",
+            "message": (
+                f"Student number {existing['student_no']} is already registered "
+                f"as {existing['name']}."
+            ),
+            "student": existing,
+        },
+    )
 
 
 @app.post("/api/students", status_code=201)
 async def create_student(body: StudentCreate) -> dict:
+    if body.class_id is not None:
+        _require_class(body.class_id)
+    existing = db.find_student_by_no(body.student_no)
+    if existing is not None:
+        raise _student_exists_error(existing)
     try:
         raw = base64.b64decode(body.embedding_b64)
         embedding = np.frombuffer(raw, dtype=np.float32)
-        student_id = db.add_student(body.student_no, body.name, embedding)
+        student_id = db.add_student(body.student_no, body.name, embedding, body.class_id)
         return {"id": student_id}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/students/{student_id}")
+async def update_student(student_id: int, body: StudentUpdate) -> dict:
+    """Fix a typo in a student's number or name (face data is unchanged)."""
+    if db.get_student_embedding(student_id) is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+    student_no = body.student_no.strip() if body.student_no is not None else None
+    name = body.name.strip() if body.name is not None else None
+    if student_no == "" or name == "":
+        raise HTTPException(status_code=400, detail="Student number and name cannot be empty")
+    if student_no is not None:
+        existing = db.find_student_by_no(student_no)
+        if existing is not None and existing["id"] != student_id:
+            raise _student_exists_error(existing)
+    db.update_student(student_id, student_no=student_no, name=name)
+    return {"id": student_id}
 
 
 @app.delete("/api/students/{student_id}", status_code=204)
@@ -350,11 +695,17 @@ async def enroll_from_photos(
     student_no: str = Body(...),
     name: str = Body(...),
     files: list[UploadFile] = File(...),
+    class_id: int | None = Body(None),
 ) -> dict:
     """Accept 1-5 image files, extract face embeddings, average and save."""
+    if class_id is not None:
+        _require_class(class_id)
+    existing = db.find_student_by_no(student_no)
+    if existing is not None:
+        raise _student_exists_error(existing)
     mean, count = await _mean_embedding_from_uploads(files)
     try:
-        student_id = db.add_student(student_no, name, mean)
+        student_id = db.add_student(student_no, name, mean, class_id)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -364,13 +715,15 @@ async def enroll_from_photos(
 # ── Sessions ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/sessions")
-async def list_sessions() -> list[dict]:
-    return db.list_sessions()
+async def list_sessions(class_id: int | None = None) -> list[dict]:
+    return db.list_sessions(class_id)
 
 
 @app.post("/api/sessions", status_code=201)
 async def create_session(body: SessionCreate) -> dict:
-    session_id = db.create_session(body.name)
+    if body.class_id is not None:
+        _require_class(body.class_id)
+    session_id = db.create_session(body.name, body.class_id)
     return {"id": session_id}
 
 
@@ -1206,21 +1559,29 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
     """Stream screen-region capture with face recognition.
 
     Client sends:
-      {"action": "start", "region": {left,top,width,height}, "session_id": int,
-       "missing_after": float}
+      {"action": "start", "region": {left,top,width,height}, "class_id": int,
+       "name": str, "missing_after": float}
       {"action": "stop"}
       {"action": "enroll_unknown", "index": int, "student_no": str, "name": str}
+      {"action": "verify", "student_id": int}          # quick face re-check
+      {"action": "challenge", "student_id": int}       # random action check
+      {"action": "challenge_cancel"}
 
     Server sends:
       {"type": "frame",  "jpeg": str, "matches": [...], "unknowns": [...]}
       {"type": "roster", "students": [...]}
       {"type": "alert",  "message": str, "level": str}
+      {"type": "challenge_started", "student_id", "name", "instructions", "chat_text"}
+      {"type": "challenge", ...progress, "result": null | "passed" | "failed"}
+      {"type": "challenge_cancelled", "student_id": int}
       {"type": "error",  "message": str}
     """
     await websocket.accept()
 
     from app.core.face_engine import FaceEngine
     from app.core.roster_monitor import RosterMonitor
+    from app.core.stillness import StillnessWatch
+    from app.core.tile_challenge import TileChallenge
     from app.core.tile_tracker import TileTracker
     from app.data import db
 
@@ -1229,6 +1590,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
     result_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
 
     session_id: int | None = None
+    class_id: int | None = None
     roster_monitor: RosterMonitor | None = None
     tracker: TileTracker | None = None
     embeddings: list[tuple[int, np.ndarray]] = []
@@ -1237,6 +1599,12 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
     unknown_registry: dict[int, dict] = {}
     verify_student: int | None = None
     verify_deadline = 0.0
+    # Random action check on one tile (at most one at a time) and the
+    # still-tile watch that suggests one.
+    challenge: TileChallenge | None = None
+    challenge_on = threading.Event()
+    to_challenge = _LatestFrame()
+    stillness = StillnessWatch()
     state_lock = threading.Lock()
 
     def _push(payload: dict) -> None:
@@ -1314,6 +1682,9 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         shot = sct.grab(region)
                         frame = np.ascontiguousarray(np.asarray(shot, dtype=np.uint8)[:, :, :3])
                     to_analyse.put(frame)
+                    if challenge_on.is_set():
+                        # Every preview frame: a blink is over in ~0.2 s.
+                        to_challenge.put(frame)
 
                     h, w = frame.shape[:2]
                     k = min(1.0, PREVIEW_MAX_W / float(w))
@@ -1373,6 +1744,27 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
 
                 matches, unknown_faces = t.process(frame)
                 rm.update({m[0] for m in matches})
+
+                with state_lock:
+                    ch = challenge
+                    sw = stillness
+                if ch is not None:
+                    hit = next((m for m in matches if m[0] == ch.student_id), None)
+                    if hit is not None:
+                        ch.note_identified(hit[2])
+                for sid in sw.update(frame, matches):
+                    if ch is not None and ch.student_id == sid:
+                        continue  # already being checked
+                    msg_txt = (
+                        f"{nms.get(sid, 'A student')}'s video has barely changed for "
+                        f"{int(sw.still_after)} seconds — it may be a photo or a frozen feed. "
+                        "Click their name to run a liveness check."
+                    )
+                    s_id = session_id
+                    if s_id is not None:
+                        db.log_event(s_id, sid, "suspected_still", msg_txt)
+                    _push({"type": "alert", "message": msg_txt, "level": "warn"})
+                sw.keep_only({m[0] for m in matches})
 
                 # On-demand re-verification: the instructor tapped a
                 # student in the roster and is waiting for a fresh answer.
@@ -1448,8 +1840,14 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                 overlay = boxes
 
                 roster = rm.status()
+                suspects = sw.flagged()
+                checking = ch.student_id if ch is not None else None
+                for r in roster:
+                    r["suspect"] = r["id"] in suspects
+                    r["checking"] = r["id"] == checking
                 _live.stats(roster, len(ulist))
-                sig = (tuple((r["id"], r["state"]) for r in roster), tuple(sorted(live)))
+                sig = (tuple((r["id"], r["state"], r["suspect"], r["checking"]) for r in roster),
+                       tuple(sorted(live)))
                 if sig != last_sig or now - last_push >= ANALYSIS_PUSH_EVERY:
                     last_sig, last_push = sig, now
                     _push({
@@ -1461,6 +1859,63 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
         except Exception as exc:  # noqa: BLE001
             _push({"type": "error", "message": str(exc)})
 
+    def _end_challenge(ch: TileChallenge) -> None:
+        """Detach `ch` if it is still the current check, and free FaceMesh."""
+        nonlocal challenge
+        with state_lock:
+            if challenge is ch:
+                challenge = None
+                challenge_on.clear()
+        ch.close()
+
+    def _challenge_thread(stop: threading.Event) -> None:
+        last_sig = None
+        last_push = 0.0
+        try:
+            while not stop.is_set() and not stop_event.is_set():
+                if not challenge_on.wait(0.5):
+                    continue
+                frame = to_challenge.take(timeout=0.5)
+                if frame is None:
+                    continue
+                with state_lock:
+                    ch = challenge
+                if ch is None:
+                    continue
+                st = ch.process(frame)
+                now = time.monotonic()
+                sig = (st["prompt"], st["step"], st["face_found"], st["small_face"],
+                       st["result"], st["seconds_left"])
+                if sig != last_sig or now - last_push >= 0.5:
+                    last_sig, last_push = sig, now
+                    _push({"type": "challenge", **st})
+                if st["result"] is None:
+                    continue
+                ok = st["result"] == "passed"
+                s_id = session_id
+                if s_id is not None:
+                    db.log_event(s_id, ch.student_id,
+                                 "liveness_passed" if ok else "liveness_failed", ch.reason)
+                if ok:
+                    with state_lock:
+                        stillness.clear(ch.student_id)
+                _push({"type": "alert", "message": ch.reason, "level": "ok" if ok else "error"})
+                _end_challenge(ch)
+        except Exception as exc:  # noqa: BLE001
+            _push({"type": "error", "message": f"Liveness check stopped: {exc}"})
+            with state_lock:
+                ch = challenge
+            if ch is not None:
+                _end_challenge(ch)
+
+    def _cancel_challenge() -> int | None:
+        with state_lock:
+            ch = challenge
+        if ch is None:
+            return None
+        _end_challenge(ch)
+        return ch.student_id
+
     cap_thread: threading.Thread | None = None
     run_stop = threading.Event()
 
@@ -1469,8 +1924,8 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
             return await _send_json(websocket, data)
 
     async def _recv_loop() -> None:
-        nonlocal session_id, roster_monitor, tracker, embeddings, names, cap_thread
-        nonlocal verify_student, verify_deadline, overlay, run_stop
+        nonlocal session_id, class_id, roster_monitor, tracker, embeddings, names, cap_thread
+        nonlocal verify_student, verify_deadline, overlay, run_stop, challenge, stillness
         try:
             while True:
                 msg = await websocket.receive_json()
@@ -1483,21 +1938,31 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                     region = msg["region"]
                     missing_after = float(msg.get("missing_after", 5.0))
                     session_name = msg.get("name", "")
+                    # Only this class's roster is matched. Older frontends
+                    # send no class_id and get every student, as before.
+                    raw_cid = msg.get("class_id")
+                    cid = int(raw_cid) if raw_cid is not None else None
+                    if cid is not None and db.get_class(cid) is None:
+                        await _say({"type": "error", "message": "That class no longer exists."})
+                        continue
 
-                    sid = db.create_session(session_name)
-                    roster = db.list_students()
-                    embs = db.all_embeddings()
+                    sid = db.create_session(session_name, cid)
+                    roster = db.list_students(cid)
+                    embs = db.all_embeddings(cid)
                     nms_map = {s["id"]: s["name"] for s in roster}
                     engine = FaceEngine.instance()
                     t = TileTracker(engine, lambda: embeddings)
                     rm = RosterMonitor(roster, _roster_event, missing_after=missing_after)
 
+                    _cancel_challenge()
                     with state_lock:
                         session_id = sid
+                        class_id = cid
                         embeddings = embs
                         names = nms_map
                         tracker = t
                         roster_monitor = rm
+                        stillness = StillnessWatch()
 
                     # Each run gets its own stop flag, so threads from a
                     # previous run can never keep going after a quick restart.
@@ -1510,12 +1975,15 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                     cap_thread.start()
                     threading.Thread(target=_analysis_thread, args=(run_stop,),
                                      daemon=True).start()
+                    threading.Thread(target=_challenge_thread, args=(run_stop,),
+                                     daemon=True).start()
                     _live.start(session_name or "Meet session")
                     _live.stats(rm.status(), 0)
                     await _say({"type": "started", "session_id": sid})
 
                 elif action == "stop":
                     run_stop.set()
+                    _cancel_challenge()
                     _live.stop()
                     s_id = session_id
                     if s_id is not None:
@@ -1525,6 +1993,41 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         tracker = None
                         roster_monitor = None
                     await _say({"type": "stopped"})
+
+                elif action == "challenge":
+                    raw_id = msg.get("student_id")
+                    with state_lock:
+                        active = session_id is not None and tracker is not None
+                        name = names.get(int(raw_id)) if raw_id is not None else None
+                    if not active:
+                        await _say({"type": "error",
+                                    "message": "Start monitoring before running a liveness check."})
+                        continue
+                    if name is None:
+                        await _say({"type": "error",
+                                    "message": "That student is not on this class roster."})
+                        continue
+                    _cancel_challenge()  # one check at a time
+                    try:
+                        # Loading FaceMesh takes a moment; keep the socket responsive.
+                        ch = await asyncio.to_thread(TileChallenge, int(raw_id), name)
+                    except Exception as exc:  # noqa: BLE001
+                        await _say({"type": "error",
+                                    "message": f"Could not start the liveness check: {exc}"})
+                        continue
+                    with state_lock:
+                        challenge = ch
+                        challenge_on.set()
+                    await _say({
+                        "type": "challenge_started", "student_id": ch.student_id,
+                        "name": name, "instructions": ch.instructions(),
+                        "chat_text": ch.chat_text(),
+                    })
+
+                elif action == "challenge_cancel":
+                    sid_cancelled = _cancel_challenge()
+                    if sid_cancelled is not None:
+                        await _say({"type": "challenge_cancelled", "student_id": sid_cancelled})
 
                 elif action == "verify":
                     student_id = msg.get("student_id")
@@ -1566,8 +2069,16 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         u = cache[idx]
                     raw = base64.b64decode(u["embedding"])
                     emb = np.frombuffer(raw, dtype=np.float32)
+                    existing = db.find_student_by_no(msg["student_no"])
+                    if existing is not None:
+                        await _say({
+                            "type": "error",
+                            "message": f"Student number {existing['student_no']} is "
+                                       f"already registered as {existing['name']}.",
+                        })
+                        continue
                     try:
-                        new_id = db.add_student(msg["student_no"], msg["name"], emb)
+                        new_id = db.add_student(msg["student_no"], msg["name"], emb, class_id)
                     except Exception as exc:
                         await _say({"type": "error", "message": str(exc)})
                         continue
@@ -1590,6 +2101,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
             await _say({"type": "error", "message": str(exc)})
         finally:
             stop_event.set()
+            _cancel_challenge()
             s_id = session_id
             if s_id is not None:
                 db.end_session(s_id)

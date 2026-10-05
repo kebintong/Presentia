@@ -1,0 +1,26 @@
+# Presentia online registration — Cloudflare Workers (free plan).
+# See README.md for the one-time setup.
+name = "presentia"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+
+# The website. Static files are served directly; only /api/* runs the Worker.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+not_found_handling = "404-page"
+
+# Registrations waiting to be collected by the desktop app.
+# `npx wrangler d1 create presentia` prints the database_id to paste here.
+[[d1_databases]]
+binding = "DB"
+database_name = "presentia"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# Daily clean-up: delete anything not collected within 14 days.
+[triggers]
+crons = ["17 3 * * *"]
+
+[observability]
+enabled = true

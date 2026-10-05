@@ -6,9 +6,12 @@ import RegisterPage from './pages/RegisterPage'
 import MeetPage from './pages/MeetPage'
 import SessionPage from './pages/SessionPage'
 import ReportsPage from './pages/ReportsPage'
+import ClassPickerPage from './pages/ClassPickerPage'
+import StudentsPage from './pages/StudentsPage'
+import { ClassInfo } from './classes'
 import './style.css'
 
-type Page = 'register' | 'meet' | 'session' | 'reports'
+type Page = 'register' | 'students' | 'meet' | 'session' | 'reports'
 type Theme = 'dark' | 'light'
 
 const API = 'http://127.0.0.1:7788'
@@ -18,6 +21,25 @@ const goApp = () => (window as any)['go']?.['main']?.['App']
 
 export default function App() {
   const [page, setPage] = useState<Page>('register')
+  // The class being worked on. The app always opens on the class picker
+  // (null), like the Classroom home page; every page then works on this
+  // class's roster and sessions only.
+  const [activeClass, setActiveClass] = useState<ClassInfo | null>(null)
+
+  const openClass = async (cls: ClassInfo) => {
+    // A class with nobody in it starts on Register; otherwise straight to
+    // monitoring, which is what an instructor opens a past class for.
+    setPage(cls.student_count > 0 ? 'meet' : 'register')
+    setActiveClass(cls)
+    try {
+      const res = await fetch(`${API}/api/classes/${cls.id}/open`, { method: 'POST' })
+      if (res.ok) setActiveClass(await res.json())
+    } catch {
+      // Only the "last opened" ordering is lost; the class still works.
+    }
+  }
+
+  const switchClass = () => setActiveClass(null)
   const [engineReady, setEngineReady] = useState(false)
   // What first launch is doing (hardware check, model download progress).
   const [engineMessage, setEngineMessage] = useState('')
@@ -122,12 +144,17 @@ export default function App() {
     return info
   }
 
-  const PAGE_COMPONENTS: Record<Page, React.ReactNode> = {
-    register: <RegisterPage />,
-    meet:     <MeetPage />,
-    session:  <SessionPage />,
-    reports:  <ReportsPage />,
-  }
+  // key = class id: switching class remounts the page, so nothing (a
+  // running camera, a roster, a selected report) carries over between classes.
+  const PAGE_COMPONENTS: Record<Page, React.ReactNode> = activeClass
+    ? {
+        register: <RegisterPage key={activeClass.id} classInfo={activeClass} onOpenStudents={() => setPage('students')} />,
+        students: <StudentsPage key={activeClass.id} classInfo={activeClass} />,
+        meet:     <MeetPage key={activeClass.id} classInfo={activeClass} />,
+        session:  <SessionPage key={activeClass.id} classInfo={activeClass} />,
+        reports:  <ReportsPage key={activeClass.id} classInfo={activeClass} />,
+      }
+    : { register: null, students: null, meet: null, session: null, reports: null }
 
   return (
     <>
@@ -143,6 +170,8 @@ export default function App() {
           onToggleTheme={toggleTheme}
           version={version}
           iridescent={iridescent}
+          activeClass={activeClass}
+          onSwitchClass={switchClass}
         />
 
         {/* App Body: Slim icon sidebar + Main viewport */}
@@ -153,9 +182,12 @@ export default function App() {
             engineReady={engineReady}
             onOpenSettings={() => setSettingsOpen(true)}
             updateAvailable={!!update?.available}
+            showNav={!!activeClass}
           />
           <main className="main-viewport">
-            {PAGE_COMPONENTS[page]}
+            {activeClass
+              ? PAGE_COMPONENTS[page]
+              : <ClassPickerPage onOpen={openClass} />}
           </main>
         </div>
       </div>
