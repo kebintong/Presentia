@@ -1,0 +1,200 @@
+# The Release button: Actions → Release → Run workflow → type the version.
+#
+# 1. Checks the version (format, not used yet, higher than the last release).
+# 2. Runs all CI checks on main.
+# 3. On Windows: sets the version, builds the desktop app (Wails), the frozen
+#    engine (PyInstaller), starts the engine once to make sure it runs, and
+#    builds the installer (Inno Setup).
+# 4. Commits the version change, tags it, and creates a DRAFT GitHub release
+#    with PresentiaSetup.exe and its SHA-256 checksum.
+#
+# Nothing reaches users until you open the draft and press Publish: installed
+# copies only see published releases.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 1.5.4 (no v)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Check the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      previous: ${{ steps.check.outputs.previous }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: check
+        name: Validate
+        env:
+          VERSION: ${{ inputs.version }}
+          REF: ${{ github.ref }}
+        run: |
+          version="${VERSION#v}"
+          version="$(echo "$version" | tr -d '[:space:]')"
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Run the release from the main branch (you chose $REF)."; exit 1
+          fi
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::The version must look like 1.5.4 (got '$VERSION')."; exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::v$version already exists. Choose a new version."; exit 1
+          fi
+          previous="$(git tag --list 'v[0-9]*' | sed 's/^v//' | sort -V | tail -n1)"
+          if [ -n "$previous" ]; then
+            highest="$(printf '%s\n%s\n' "$previous" "$version" | sort -V | tail -n1)"
+            if [ "$highest" != "$version" ]; then
+              echo "::error::v$version is not higher than the last release v$previous."; exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$version (last release: v${previous:-none})" >> "$GITHUB_STEP_SUMMARY"
+
+  checks:
+    name: CI
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build and draft the release
+    needs: [validate, checks]
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      PREVIOUS: ${{ needs.validate.outputs.previous }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: presentia-desktop/frontend/package-lock.json
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: presentia-desktop/go.mod
+          cache-dependency-path: presentia-desktop/go.sum
+
+      - name: Install the Wails CLI (same version as go.mod)
+        run: |
+          $m = Select-String -Path presentia-desktop\go.mod -Pattern 'github.com/wailsapp/wails/v2 (v[0-9.]+)'
+          $wails = $m.Matches[0].Groups[1].Value
+          go install "github.com/wailsapp/wails/v2/cmd/wails@$wails"
+          wails version
+
+      - name: Set the version
+        run: powershell -ExecutionPolicy Bypass -File build\set-version.ps1 $env:VERSION
+
+      - name: Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "pyinstaller>=6.10"
+
+      - name: Build the desktop app
+        working-directory: presentia-desktop
+        run: wails build -clean -platform windows/amd64
+
+      - name: Build the engine
+        run: pyinstaller build\presentia-sidecar.spec --noconfirm --clean
+
+      - name: Start the engine once
+        run: powershell -ExecutionPolicy Bypass -File build\smoke-test-engine.ps1
+
+      - name: Build the installer
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+          & $iscc build\installer.iss
+          if ($LASTEXITCODE) { throw "Inno Setup failed ($LASTEXITCODE)" }
+          $setup = 'build\output\PresentiaSetup.exe'
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
+          "$hash  PresentiaSetup.exe" | Out-File -Encoding ascii build\output\PresentiaSetup.exe.sha256
+          $mb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          "Installer: $mb MB, SHA-256 $hash" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: PresentiaSetup-${{ env.VERSION }}
+          path: build/output/
+          retention-days: 14
+
+      - name: Commit the version and tag it
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add presentia-desktop/update.go build/installer.iss presentia-desktop/wails.json
+          git commit -m "Release $env:VERSION"
+          git tag -a "v$env:VERSION" -m "Presentia $env:VERSION"
+          git push origin "v$env:VERSION"
+          if ($LASTEXITCODE) { throw "Could not push the tag v$env:VERSION" }
+          # Also put the version change on main. If main is protected (or moved
+          # on meanwhile) this is refused, which is fine: the release is built
+          # from the tag, and the next release sets the version again.
+          git push origin "HEAD:main"
+          if ($LASTEXITCODE) {
+            "::warning::The version change was not pushed to main (protected or changed). The release is unaffected."
+            $global:LASTEXITCODE = 0
+          }
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $range = if ($env:PREVIOUS) { "v$env:PREVIOUS..HEAD" } else { "HEAD" }
+          $changes = git log $range --no-merges --pretty="format:- %s" |
+            Where-Object { $_ -notmatch '^- Release ' }
+          $hash = (Get-Content build\output\PresentiaSetup.exe.sha256).Split(' ')[0]
+          $notes = @(
+            "## What's new"
+            ""
+            "_Edit this before publishing: say in plain words what changed for teachers._"
+            ""
+            "## Changes since v$($env:PREVIOUS)"
+            ""
+            $changes
+            ""
+            "## Download"
+            ""
+            "Download **PresentiaSetup.exe** below and run it. Installed copies offer this update in Settings → Updates once it is published."
+            ""
+            "SHA-256: ``$hash``"
+          ) -join "`n"
+          $notes | Out-File -Encoding utf8 release-notes.md
+          gh release create "v$env:VERSION" --draft --title "Presentia $env:VERSION" `
+            --notes-file release-notes.md `
+            build\output\PresentiaSetup.exe build\output\PresentiaSetup.exe.sha256
+          if ($LASTEXITCODE) { throw "Could not create the draft release" }
+          "Draft release created: https://github.com/${{ github.repository }}/releases (open it, edit the notes, press Publish)" |
+            Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY

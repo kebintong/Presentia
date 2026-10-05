@@ -1,0 +1,48 @@
+# Builds the frozen engine (PyInstaller, Windows) and starts it once, like the
+# installed app does. Catches modules PyInstaller leaves out, which only fail
+# after installing. Runs when the engine, its dependencies or its build list
+# change; the Release workflow does the same check on every release.
+name: Engine build
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", "requirements.txt", "build/presentia-sidecar.spec", "build/smoke-test-engine.ps1", "models/**"]
+  pull_request:
+    paths: ["app/**", "requirements.txt", "build/presentia-sidecar.spec", "build/smoke-test-engine.ps1", "models/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: engine-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  freeze:
+    name: Frozen engine (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "pyinstaller>=6.10"
+
+      - name: Build the engine
+        run: pyinstaller build\presentia-sidecar.spec --noconfirm --clean
+
+      - name: Start the engine once
+        run: powershell -ExecutionPolicy Bypass -File build\smoke-test-engine.ps1

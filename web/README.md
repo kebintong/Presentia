@@ -51,11 +51,27 @@ Either:
 The app identifies itself to the website with credentials it creates on first use (stored in its own
 database). Another teacher's install cannot see or collect your classes' registrations.
 
-## Updating the website
+## Updating the website (automatic deploys)
 
-Change files in `web/`, then run `npm run deploy` again. The website updates independently of the desktop
-app's GitHub releases. If `schema.sql` gains new tables, run `npm run db:init` again (it only adds what is
-missing).
+The website is deployed by GitHub Actions (`.github/workflows/ci.yml`, job "Deploy the registration website"):
+after a push to `main` that changes `web/`, **once every check has passed**, it runs `wrangler deploy`. A red
+check means the website stays as it is. To deploy by hand, open Actions → CI → Run workflow on `main` and tick
+"Also deploy the registration website". The website updates independently of the desktop app's releases; new
+database columns and tables are added by the Worker itself.
+
+One-time setup:
+
+1. Cloudflare dashboard → **My Profile → API Tokens → Create Token** → template **Edit Cloudflare Workers** →
+   Account Resources: your account; Zone Resources: All zones → add one more permission row,
+   **Account · D1 · Edit** → Continue → Create Token. Copy the token (it is shown only once).
+2. Cloudflare dashboard → **Workers & Pages** → copy the **Account ID** (right-hand side).
+3. GitHub → the repository → **Settings → Secrets and variables → Actions → New repository secret**, twice:
+   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+4. Cloudflare → Workers & Pages → **presentia → Settings → Build** → disconnect the Git repository, so only
+   GitHub Actions deploys (otherwise every push to `main` deploys even when checks fail).
+
+Until the secrets exist, the deploy job only prints a note. `npm run deploy` from your own computer still works
+as a manual fallback.
 
 ## Testing locally
 

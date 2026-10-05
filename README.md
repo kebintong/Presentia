@@ -228,26 +228,32 @@ duplicate-face and student-number rules, diagnostic mode and reports, Delete all
 fallback (needs `openssl`, so it is skipped on Windows), and the PyInstaller build list.
 
 Every push runs [GitHub Actions](.github/workflows/ci.yml): the Python tests, the frontend type check and build,
-a Windows build of the desktop shell, and a dry-run deploy of the website. **Release only from a commit with a
-green check.**
+a Windows build of the desktop shell, and a dry-run deploy of the website.
 
 ---
 
 ## Building the installer and releasing
 
-Full steps are in [`build/BUILD.md`](build/BUILD.md). In short, on Windows:
+Releases are built by GitHub Actions, not on a developer's PC:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File build\set-version.ps1 1.5.3   # update.go, installer.iss, wails.json
-cd presentia-desktop; wails build; cd ..
-pyinstaller build\presentia-sidecar.spec --noconfirm --clean
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build\installer.iss    # → build\output\PresentiaSetup.exe
-git tag v1.5.3; git push origin v1.5.3
-```
+1. **Actions → Release → Run workflow**, type the new version (e.g. `1.5.4`).
+2. The workflow checks the version, runs every CI check, builds the desktop app, the frozen engine and the
+   installer on Windows, starts the engine once to make sure it runs, tags the version and creates a
+   **draft release** with `PresentiaSetup.exe` and its SHA-256 checksum.
+3. Open the draft, write the release notes, and press **Publish**. Installed copies check `releases/latest` and
+   offer the update; drafts and pre-releases are never offered, and the repository must stay public for the
+   update check to see releases.
 
-Then create a GitHub release for the tag and attach `PresentiaSetup.exe`. Installed copies check
-`releases/latest` and offer the update; the release must be a normal release (not a draft or pre-release), and
-the repository must stay public for the update check to see it.
+Details and the by-hand fallback are in [`build/BUILD.md`](build/BUILD.md).
+
+### Automation at a glance
+
+| Workflow | When | What |
+|---|---|---|
+| [CI](.github/workflows/ci.yml) | every push and pull request | Python tests, frontend build, Windows build of the Go shell, website dry run; on `main`, deploys the website when `web/` changed and everything passed |
+| [Engine build](.github/workflows/engine-build.yml) | changes to the engine, its dependencies or build list | builds the frozen engine on Windows and starts it once |
+| [Release](.github/workflows/release.yml) | by hand (version box) | checks, builds the installer, tags, drafts the release |
+| [Dependabot](.github/dependabot.yml) | monthly | grouped update pull requests for GitHub Actions, npm and Go packages |
 
 ---
 
@@ -255,7 +261,7 @@ the repository must stay public for the update check to see it.
 
 The website in [`web/`](web/) runs on Cloudflare's free plan (Workers + D1, no payment card needed). Students enter
 the class join code, their student number and name, agree to the privacy notice, and pass a live face check in the
-browser. It is deployed automatically from GitHub (Workers Builds, root directory `web`) whenever `main` changes.
+browser. GitHub Actions deploys it after a push to `main` that changes `web/`, once every check has passed.
 
 The default address is set in `app/data/cloud.py` (`DEFAULT_URL`, and `REPORTS_URL` for diagnostic reports).
 Setup, local testing, reading diagnostic reports and the optional GitHub-issue integration are described in
@@ -301,11 +307,12 @@ Presentia/
 │       └── components/                 # TopBar, Sidebar, SettingsPanel and its tabs,
 │                                       # OnlineRegistration, ProblemPrompt, ReportDialog, …
 ├── web/                                # Registration website (Cloudflare Worker + D1)
-├── build/                              # PyInstaller spec, Inno Setup script, set-version.ps1, BUILD.md
+├── build/                              # PyInstaller spec, Inno Setup script, set-version.ps1,
+│                                       # smoke-test-engine.ps1, BUILD.md
 ├── tests/                              # pytest suite
 ├── tools/verify_models.py              # Compare embeddings with the reference implementation
 ├── models/face_landmarker.task         # MediaPipe model (bundled)
-├── .github/workflows/ci.yml            # Automatic checks
+├── .github/                            # CI, Engine build and Release workflows, Dependabot
 └── requirements.txt
 ```
 

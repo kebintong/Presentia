@@ -38,6 +38,7 @@ models/
 !/build/presentia-sidecar.spec
 !/build/BUILD.md
 !/build/set-version.ps1
+!/build/smoke-test-engine.ps1
 
 # Wails compiles the desktop exe here.
 presentia-desktop/build/bin/

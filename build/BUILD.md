@@ -128,27 +128,44 @@ to build that React step-through next; it'd live in
 `presentia-desktop/frontend/src/pages/` alongside your other pages and
 gate on a flag like `localStorage.getItem('setupComplete')`.
 
-## Every-release checklist
+## Releasing (the Release button)
 
-First make sure the commit you are releasing has a **green check** on GitHub
-(the CI workflow in `.github/workflows/ci.yml` runs the Python tests, the
-frontend build, a Windows build of the desktop app and a website dry run on
-every push). A red X means something is broken: open the **Actions** tab to
-see which step failed, and fix it before building the installer.
+Releases are built on GitHub, not on your PC (`.github/workflows/release.yml`):
 
-To run the Python tests on your own computer:
+1. Make sure the latest commit on `main` has a **green check** (Actions tab).
+2. GitHub → **Actions** → **Release** → **Run workflow** → branch `main`, type the version (e.g. `1.5.4`) →
+   **Run workflow**.
+3. Wait 15–25 minutes. The workflow:
+   - refuses a version that already exists or is not higher than the last release;
+   - runs all CI checks;
+   - on Windows: sets the version (`set-version.ps1`), builds the desktop app (`wails build`), the engine
+     (`pyinstaller`), **starts the engine once** (`build/smoke-test-engine.ps1`) and builds the installer
+     (Inno Setup);
+   - commits "Release 1.5.4", tags `v1.5.4`, and creates a **draft** release with `PresentiaSetup.exe` and its
+     SHA-256 checksum, listing the commits since the last release.
+4. Open **Releases** → the draft. Optionally download and try the installer. Rewrite the "What's new" part in
+   plain words, then press **Publish release**. Only now do installed copies see the update.
+
+If a step fails, nothing is published: open the failed run, look at the red step's log, fix, and run the
+Release again (a tag is only created after everything built). If the version commit could not be pushed to
+`main` (for example because `main` is protected), the run shows a warning; the release itself is fine, because
+it is built from the tag.
+
+Every push also runs the **Engine build** workflow when engine code, `requirements.txt` or the spec changes, so
+a module missing from the frozen build shows up before release day.
+
+## Building by hand (fallback)
+
+Still works the same as before, e.g. to test a build locally:
 
 ```powershell
 .venv\Scripts\python -m pip install pytest httpx openpyxl
 .venv\Scripts\python -m pytest tests -q
-```
-
-Then build:
-
-```bash
+powershell -ExecutionPolicy Bypass -File build\set-version.ps1 1.5.4
+cd presentia-desktop; wails build; cd ..
 pyinstaller build\presentia-sidecar.spec --noconfirm --clean
-cd presentia-desktop && wails build && cd ..
-ISCC.exe build\installer.iss
+powershell -ExecutionPolicy Bypass -File build\smoke-test-engine.ps1
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build\installer.iss
 ```
-Bump `MyAppVersion` in `installer.iss` each release so Windows shows the
-correct version in Add/Remove Programs.
+
+Don't publish a hand-built installer under a version the Release button will also use.
