@@ -17,7 +17,19 @@ interface Pending {
   existing_id: number | null
   existing_name: string | null
   existing_in_class: boolean
+  /** Same face as a registered student with another student number. */
+  face_match: { id: number; student_no: string; name: string; in_class: boolean } | null
+  /** Same face as another registration that is also waiting. */
+  pending_match: { student_no: string; name: string } | null
+  /** The student number is on file, but with a different face. */
+  face_differs: boolean
 }
+
+/** Can be accepted without the instructor having to look twice. */
+const isClean = (p: Pending) =>
+  !p.problem && !p.face_match && !p.pending_match && !p.face_differs && (p.has_face || p.existing_id !== null)
+
+const canAccept = (p: Pending) => (p.has_face || p.existing_id !== null) && !p.face_match
 
 interface Props {
   classInfo: ClassInfo
@@ -186,6 +198,8 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
         onRosterChanged()
       }
       setPending((list) => list.filter((x) => x.id !== p.id))
+      // Accepting one can make another waiting registration a duplicate.
+      if (accept) loadPending()
     } catch (err: any) {
       setMessage({ text: err.message, error: true })
     } finally {
@@ -194,7 +208,7 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
   }
 
   const acceptAllReady = async () => {
-    const ready = pending.filter((p) => !p.problem && (p.has_face || p.existing_id))
+    const ready = pending.filter(isClean)
     for (const p of ready) await decide(p, true)
   }
 
@@ -204,7 +218,7 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
   }
 
   if (url === null) return null
-  const readyCount = pending.filter((p) => !p.problem && (p.has_face || p.existing_id)).length
+  const readyCount = pending.filter(isClean).length
 
   return (
     <section className="launcher-card online-card">
@@ -305,7 +319,7 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
           </div>
           <div className="pending-list">
             {pending.map((p) => {
-              const canAccept = p.has_face || p.existing_id !== null
+              const acceptable = canAccept(p)
               return (
                 <div key={p.id} className="pending-row">
                   {p.photo_b64
@@ -323,6 +337,24 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
                           : `Already registered as ${p.existing_name}. Accepting adds them with their saved face data.`}
                       </div>
                     )}
+                    {p.face_match && (
+                      <div className="pending-note danger">
+                        {p.face_match.in_class
+                          ? `Same face as ${p.face_match.name} (${p.face_match.student_no}), who is already in this class. Reject this registration.`
+                          : `Same face as ${p.face_match.name} (${p.face_match.student_no}), who is already registered. Reject this one; to add them, use "Add from other classes".`}
+                      </div>
+                    )}
+                    {!p.face_match && p.pending_match && (
+                      <div className="pending-note warn">
+                        Same face as {p.pending_match.name} ({p.pending_match.student_no}), who is also waiting.
+                        Accept only the right one.
+                      </div>
+                    )}
+                    {p.face_differs && (
+                      <div className="pending-note warn">
+                        This face does not match the one on file for {p.existing_name}. Check it is really them.
+                      </div>
+                    )}
                     {p.problem && <div className="pending-note warn">{p.problem}</div>}
                   </div>
                   <div className="pending-buttons">
@@ -332,8 +364,12 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
                     <button
                       className="btn-primary"
                       onClick={() => decide(p, true)}
-                      disabled={busy === `p${p.id}` || !canAccept}
-                      title={canAccept ? 'Add to this class' : 'No usable face — reject and ask them to register again'}
+                      disabled={busy === `p${p.id}` || !acceptable}
+                      title={
+                        acceptable ? 'Add to this class'
+                          : p.face_match ? 'This face is already registered under another student number'
+                          : 'No usable face — reject and ask them to register again'
+                      }
                     >
                       Accept
                     </button>

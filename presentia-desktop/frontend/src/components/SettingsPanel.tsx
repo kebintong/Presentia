@@ -3,6 +3,7 @@ import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import PresentiaLogo from './PresentiaLogo'
 import PerformanceSettings from './PerformanceSettings'
 import AccessibilitySettings from './AccessibilitySettings'
+import DiagnosticsSettings from './DiagnosticsSettings'
 
 export interface UpdateInfo {
   available: boolean
@@ -14,7 +15,7 @@ export interface UpdateInfo {
 }
 
 type Phase = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
-type Tab = 'appearance' | 'performance' | 'accessibility' | 'updates'
+type Tab = 'appearance' | 'performance' | 'accessibility' | 'updates' | 'diagnostics'
 
 const TAB_KEY = 'presentia.settingsTab'
 const TABS: { id: Tab; label: string }[] = [
@@ -22,12 +23,13 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'performance', label: 'Performance' },
   { id: 'accessibility', label: 'Accessibility' },
   { id: 'updates', label: 'Updates' },
+  { id: 'diagnostics', label: 'Diagnostics' },
 ]
 
 function loadTab(): Tab {
   try {
     const t = localStorage.getItem(TAB_KEY)
-    if (t === 'appearance' || t === 'performance' || t === 'accessibility' || t === 'updates') return t
+    if (TABS.some((x) => x.id === t)) return t as Tab
   } catch { /* storage unavailable */ }
   return 'appearance'
 }
@@ -228,6 +230,8 @@ export default function SettingsPanel({
         {tab === 'accessibility' && <AccessibilitySettings />}
 
         {/* ── Software updates ─────────────────────────────────── */}
+        {tab === 'diagnostics' && <DiagnosticsSettings version={version} />}
+
         {tab === 'updates' && (
         <div className="settings-section">
           <span className="field-label">Updates</span>

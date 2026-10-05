@@ -346,14 +346,19 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
         const detail = err.detail
-        if (res.status === 409 && detail?.code === 'student_exists') {
+        if (res.status === 409 && (detail?.code === 'student_exists' || detail?.code === 'face_exists')) {
           const match: Student = detail.student
           const inClass = students.some((st) => st.id === match.id)
+          const byFace = detail.code === 'face_exists'
           setExistingMatch(inClass ? null : match)
           setStatusMsg(
             inClass
-              ? `${match.name} (${match.student_no}) is already in this class.`
-              : `Student number ${match.student_no} is already registered as ${match.name}.`
+              ? byFace
+                ? `This face is already registered as ${match.name} (${match.student_no}), who is in this class.`
+                : `${match.name} (${match.student_no}) is already in this class.`
+              : byFace
+                ? `This face is already registered as ${match.name} (${match.student_no}). One person can only be registered once.`
+                : `Student number ${match.student_no} is already registered as ${match.name}.`
           )
           return
         }

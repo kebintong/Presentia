@@ -27,8 +27,8 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from app.data import cloud, db
-from app.core import perf
-from app.core.face_engine import FaceEngine
+from app.core import diag, perf
+from app.core.face_engine import FaceEngine, MATCH_THRESHOLD
 
 # ── DB init ──────────────────────────────────────────────────────────────────
 db.init_db()
@@ -55,9 +55,11 @@ def _preload_engine() -> None:
         _engine_ready.set()
     except Exception as exc:  # noqa: BLE001
         _engine_error = str(exc)
+        diag.record("engine", f"Face models failed to load: {exc!r}")
         _engine_ready.set()
 
 
+diag.install()
 perf.apply_process_priority()
 # Tests (and CI) import this module without the face models; they set
 # PRESENTIA_SKIP_ENGINE=1 so nothing is downloaded or loaded.
@@ -164,6 +166,63 @@ async def engine_status() -> dict:
     # "message" says what first launch is busy with (hardware check, model
     # download progress) so the app can show it instead of a bare spinner.
     return {"ready": ready, "error": _engine_error, "message": FaceEngine.status().get("message")}
+
+
+@app.get("/api/diagnostics")
+async def diagnostics() -> dict:
+    """Settings → Diagnostics: this computer, the website connection step by
+    step, recent problems and the end of the sidecar log. Nothing is sent
+    anywhere; the instructor copies the report themselves."""
+    import platform
+    import tempfile
+
+    def system() -> list[dict]:
+        rows = [
+            ("Python", f"{platform.python_version()} ({'installed app' if getattr(sys, 'frozen', False) else 'development'})"),
+            ("System", platform.platform()),
+            ("Data folder", str(db.DB_PATH.parent)),
+        ]
+        try:
+            with db._connect() as conn:  # noqa: SLF001
+                rows.append(("Database schema", str(conn.execute("PRAGMA user_version").fetchone()[0])))
+        except Exception as exc:  # noqa: BLE001
+            rows.append(("Database", f"error: {exc}"))
+        st = FaceEngine.status()
+        if _engine_error:
+            engine = f"failed: {_engine_error}"
+        elif _engine_ready.is_set():
+            engine = f"ready ({st.get('backend') or '?'} on {st.get('device') or '?'})"
+        else:
+            engine = st.get("message") or "loading"
+        rows.append(("Face engine", engine))
+        try:
+            rows.append(("ONNX providers", ", ".join(perf.available_providers())))
+        except Exception:  # noqa: BLE001
+            pass
+        for mod in ("truststore", "certifi"):
+            try:
+                m = __import__(mod)
+                rows.append((mod, getattr(m, "__version__", "present")))
+            except Exception:  # noqa: BLE001
+                rows.append((mod, "missing"))
+        return [{"label": k, "value": v} for k, v in rows]
+
+    def log_tail(lines: int = 60) -> str:
+        path = os.path.join(tempfile.gettempdir(), "presentia-sidecar-stderr.log")
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                return "".join(f.readlines()[-lines:])
+        except OSError:
+            return ""
+
+    network = await asyncio.to_thread(cloud.diagnose)
+    return {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "system": system(),
+        "network": network,
+        "recent": diag.recent(),
+        "log": log_tail(),
+    }
 
 
 @app.post("/api/shutdown", status_code=204)
@@ -478,12 +537,39 @@ async def sync_class(class_id: int) -> dict:
 @app.get("/api/classes/{class_id}/pending")
 async def class_pending(class_id: int) -> list[dict]:
     _require_class(class_id)
+    rows = db.list_pending(class_id)
+    roster = {s["id"] for s in db.list_students(class_id)}
+    faces = {p["id"]: _unit(np.frombuffer(p["embedding"], dtype=np.float32))
+             for p in rows if p["embedding"] is not None}
     out = []
-    for p in db.list_pending(class_id):
+    for p in rows:
         photo = p.pop("photo_jpeg")
+        p.pop("embedding")
         p["photo_b64"] = base64.b64encode(photo).decode() if photo else ""
         p["has_face"] = bool(p["has_face"])
         p["existing_in_class"] = bool(p["existing_in_class"])
+        p["face_match"] = None     # same face as a registered student (another number)
+        p["pending_match"] = None  # same face as another waiting registration
+        p["face_differs"] = False  # number on file, but a different face
+        face = faces.get(p["id"])
+        if face is not None:
+            owner = _face_owner(face, p["student_no"])
+            if owner is not None:
+                p["face_match"] = {
+                    "id": owner["id"], "student_no": owner["student_no"],
+                    "name": owner["name"], "in_class": owner["id"] in roster,
+                }
+            for other in rows:
+                twin = faces.get(other["id"])
+                if (other["id"] != p["id"] and twin is not None
+                        and other["student_no"] != p["student_no"]
+                        and float(face @ twin) >= DUPLICATE_FACE):
+                    p["pending_match"] = {"student_no": other["student_no"], "name": other["name"]}
+                    break
+            if p["existing_id"] is not None:
+                saved = db.get_student_embedding(p["existing_id"])
+                if saved is not None and float(_unit(saved) @ face) < DUPLICATE_FACE:
+                    p["face_differs"] = True
         out.append(p)
     return out
 
@@ -511,6 +597,9 @@ async def approve_pending(pending_id: int) -> dict:
                                    "student to register again.",
         )
     emb = np.frombuffer(p["embedding"], dtype=np.float32)
+    owner = _face_owner(emb, p["student_no"])
+    if owner is not None:
+        raise _face_exists_error(owner)
     student_id = db.add_student(p["student_no"], p["name"], emb, p["class_id"])
     db.delete_pending(pending_id)
     return {"result": "added", "student_id": student_id, "name": p["name"]}
@@ -602,6 +691,54 @@ def _student_exists_error(existing: dict) -> HTTPException:
     )
 
 
+# ── One face, one student ─────────────────────────────────────────────────────
+# A face that matches a registered student this closely would also be taken
+# for that student during attendance, so it cannot be a second student. This
+# stops one person registering under several student numbers.
+DUPLICATE_FACE = MATCH_THRESHOLD
+
+
+def _unit(v: np.ndarray) -> np.ndarray:
+    v = np.asarray(v, dtype=np.float32)
+    n = float(np.linalg.norm(v))
+    return v / n if n > 0 else v
+
+
+def _face_owner(embedding: np.ndarray, student_no: str) -> dict | None:
+    """The registered student (under a DIFFERENT student number) whose face
+    this is, or None. A match under the same number is the same student."""
+    size = np.asarray(embedding).size
+    known = [(sid, e) for sid, e in db.all_embeddings() if e.size == size]
+    if not known:
+        return None
+    ids = [sid for sid, _ in known]
+    mat = np.stack([_unit(e) for _, e in known])
+    scores = mat @ _unit(embedding)
+    for i in np.argsort(-scores):
+        if scores[i] < DUPLICATE_FACE:
+            break
+        student = db.get_student(ids[i])
+        if student and student["student_no"] != student_no:
+            return {**student, "score": round(float(scores[i]), 3)}
+    return None
+
+
+def _face_exists_error(owner: dict) -> HTTPException:
+    """409 for a face that is already registered under another number. The
+    UI can offer to add that student to the class instead."""
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "face_exists",
+            "message": (
+                f"This face is already registered as {owner['name']} "
+                f"({owner['student_no']}). One person can only be registered once."
+            ),
+            "student": {k: owner[k] for k in ("id", "student_no", "name", "created_at")},
+        },
+    )
+
+
 @app.post("/api/students", status_code=201)
 async def create_student(body: StudentCreate) -> dict:
     if body.class_id is not None:
@@ -612,6 +749,12 @@ async def create_student(body: StudentCreate) -> dict:
     try:
         raw = base64.b64decode(body.embedding_b64)
         embedding = np.frombuffer(raw, dtype=np.float32)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    owner = _face_owner(embedding, body.student_no)
+    if owner is not None:
+        raise _face_exists_error(owner)
+    try:
         student_id = db.add_student(body.student_no, body.name, embedding, body.class_id)
         return {"id": student_id}
     except Exception as exc:
@@ -708,6 +851,9 @@ async def enroll_from_photos(
     if existing is not None:
         raise _student_exists_error(existing)
     mean, count = await _mean_embedding_from_uploads(files)
+    owner = _face_owner(mean, student_no)
+    if owner is not None:
+        raise _face_exists_error(owner)
     try:
         student_id = db.add_student(student_no, name, mean, class_id)
     except Exception as exc:

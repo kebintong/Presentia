@@ -1178,7 +1178,7 @@ select.input option {
 
 .settings-panel {
   width: 100%;
-  max-width: 520px;
+  max-width: 560px;
   max-height: 86vh;
   overflow-y: auto;
   display: flex;
@@ -1292,12 +1292,13 @@ select.input option {
   border: 1px solid var(--pill-border);
 }
 .settings-tab {
-  flex: 1 1 0;
+  /* Sized to the label so five tabs fit without cutting words off. */
+  flex: 1 1 auto;
   min-width: 0;
   position: relative;
-  padding: 7px 10px;
+  padding: 7px 8px;
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--muted);
   white-space: nowrap;
@@ -2327,6 +2328,7 @@ select.input option {
 .pending-sub { font-size: 11.5px; color: var(--muted); }
 .pending-note { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
 .pending-note.warn { color: var(--warn); font-weight: 600; }
+.pending-note.danger { color: var(--danger); font-weight: 600; }
 .pending-buttons { display: flex; gap: 6px; flex-shrink: 0; }
 .pending-buttons button { padding: 6px 12px; font-size: 12px; }
 
@@ -2464,7 +2466,7 @@ select.input option {
 .class-menu.up { transform-origin: bottom right; }
 
 /* Notices and status messages slide down into place. */
-.hero-tip-banner[role="status"], .settings-msg, .pending-note.warn, .check-note {
+.hero-tip-banner[role="status"], .settings-msg, .pending-note.warn, .pending-note.danger, .check-note {
   animation: slide-down var(--dur) var(--ease-out) backwards;
 }
 .check-result { animation: pop-in var(--dur) var(--ease-spring) backwards; }
@@ -2531,4 +2533,37 @@ select.input option {
     fill 480ms var(--ease-out),
     stroke 480ms var(--ease-out),
     box-shadow 480ms var(--ease-out) !important;
+}
+
+/* ── Settings → Diagnostics ─────────────────────────────────────────── */
+.diag-head { display: flex; flex-direction: column; gap: 10px; }
+.diag-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.diag-summary { flex-direction: column; gap: 4px; }
+.diag-summary.bad { background: var(--missing-dim); border-color: transparent; color: var(--ink); }
+.diag-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.diag-row {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 9px 12px; border-radius: var(--radius-md);
+  background: var(--card-row-bg); border: 1px solid var(--card-row-border);
+}
+.diag-dot { flex: none; width: 9px; height: 9px; margin-top: 5px; border-radius: 50%; background: var(--muted-lo); }
+.diag-dot.ok { background: var(--present); }
+.diag-dot.warn { background: var(--warn); }
+.diag-dot.fail { background: var(--danger); }
+.diag-text { min-width: 0; }
+.diag-title { font-size: 12.5px; font-weight: 600; color: var(--ink-heading); display: flex; gap: 8px; align-items: baseline; }
+.diag-ms { font-size: 11px; font-weight: 500; color: var(--muted-lo); }
+.diag-detail { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; margin-top: 1px; }
+.diag-kv {
+  display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0;
+  padding: 10px 12px; border-radius: var(--radius-md);
+  background: var(--card-row-bg); border: 1px solid var(--card-row-border); font-size: 11.5px;
+}
+.diag-kv dt { color: var(--muted); }
+.diag-kv dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.diag-log summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.diag-log pre {
+  margin: 8px 0 0; max-height: 220px; overflow: auto; padding: 10px 12px;
+  border-radius: var(--radius-md); background: var(--card-row-bg);
+  font-size: 10.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere;
 }

@@ -5,7 +5,8 @@ the desktop app publish a class there, download what students submitted,
 and delete it from the website once it is saved locally. Face templates are
 only ever computed here, on the instructor's computer.
 
-Only the standard library is used, so the frozen sidecar needs nothing new.
+HTTPS uses truststore and certifi (see TRUST_OPTIONS); everything else is
+the standard library.
 """
 
 from __future__ import annotations
@@ -13,6 +14,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import socket
+import ssl
+import sys
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -21,6 +25,7 @@ from typing import Callable
 import cv2
 import numpy as np
 
+from app.core import diag
 from app.data import db
 
 # The website address. Set this to your deployed site (see web/README.md) so
@@ -72,6 +77,117 @@ def share_link(code: str) -> str:
 
 # ── HTTP ─────────────────────────────────────────────────────────────────
 
+# HTTPS certificates are checked in this order. The first one that works is
+# remembered. Verification is never switched off.
+#
+#  1. Windows' own check (truststore), the same one the browser uses. It
+#     trusts certificates added by antivirus or a school network, and Windows
+#     downloads missing root certificates on demand.
+#  2. Presentia's built-in list (certifi, Mozilla's root list), for computers
+#     where Windows cannot update its root certificates (common on managed
+#     school laptops). Only tried when (1) rejects the certificate.
+#  3. Python's own check, as a last resort.
+
+def _system_ctx() -> ssl.SSLContext | None:
+    try:
+        import truststore
+
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _bundled_ctx() -> ssl.SSLContext | None:
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _python_ctx() -> ssl.SSLContext | None:
+    return ssl.create_default_context()
+
+
+TRUST_OPTIONS: list[tuple[str, Callable[[], ssl.SSLContext | None]]] = [
+    ("Windows certificate check", _system_ctx),
+    ("Presentia's built-in certificate list", _bundled_ctx),
+    ("Python's certificate check", _python_ctx),
+]
+_ctx_cache: dict[str, ssl.SSLContext | None] = {}
+_working: str | None = None   # the option that last succeeded
+
+
+def _ctx(name: str) -> ssl.SSLContext | None:
+    if name not in _ctx_cache:
+        _ctx_cache[name] = dict(TRUST_OPTIONS)[name]()
+    return _ctx_cache[name]
+
+
+def trust_in_use() -> str | None:
+    return _working
+
+
+def _is_cert_error(exc: BaseException) -> bool:
+    reason = getattr(exc, "reason", exc)
+    return isinstance(reason, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(reason)
+
+
+def _urlopen(req: urllib.request.Request):
+    """urlopen, trying the next certificate check only when the previous one
+    rejected the site's certificate (nothing has been sent at that point, so
+    retrying is safe even for POST)."""
+    global _working
+    names = [n for n, _ in TRUST_OPTIONS]
+    if _working in names:
+        names.remove(_working)
+        names.insert(0, _working)
+    if not req.full_url.startswith("https://"):
+        return urllib.request.urlopen(req, timeout=TIMEOUT)
+    last: BaseException | None = None
+    for name in names:
+        ctx = _ctx(name)
+        if ctx is None:
+            continue
+        try:
+            res = urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx)
+        except urllib.error.HTTPError:
+            _working = name     # the connection worked; the site answered with an error
+            raise
+        except (urllib.error.URLError, OSError) as exc:
+            if not _is_cert_error(exc):
+                raise
+            diag.record("cloud", f"{name} rejected the website's certificate: {getattr(exc, 'reason', exc)}",
+                        "warning")
+            last = exc
+            continue
+        if _working != name:
+            if _working is not None or name != names[0]:
+                diag.record("cloud", f"HTTPS now verified with {name}.", "warning")
+            _working = name
+        return res
+    assert last is not None
+    raise last
+
+
+def _why(exc: BaseException) -> str:
+    """Short reason a request never got an answer, for the error message."""
+    reason = getattr(exc, "reason", exc)
+    text = str(reason)
+    if isinstance(reason, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in text:
+        return "the website's security certificate could not be checked"
+    if isinstance(reason, ssl.SSLError):
+        return "a secure connection could not be made"
+    if isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in text:
+        return "the connection timed out"
+    if isinstance(reason, socket.gaierror) or "getaddrinfo" in text:
+        return "the address could not be looked up (DNS)"
+    if isinstance(reason, ConnectionRefusedError) or "refused" in text.lower():
+        return "the connection was refused"
+    return text[:120] or type(reason).__name__
+
+
 def _request(method: str, path: str, body: dict | None = None, auth: bool = True) -> dict:
     base = server_url()
     if not base:
@@ -84,7 +200,7 @@ def _request(method: str, path: str, body: dict | None = None, auth: bool = True
         host_id, secret = _credentials()
         req.add_header("Authorization", f"Bearer {host_id}.{secret}")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
+        with _urlopen(req) as res:
             raw = res.read()
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
@@ -102,9 +218,11 @@ def _request(method: str, path: str, body: dict | None = None, auth: bool = True
             exc.code, info.get("error", ""),
         ) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        print(f"[cloud] {method} {path} failed: {exc!r}", file=sys.stderr, flush=True)
+        diag.record("cloud", f"{method} {path}: {exc!r}")
         raise CloudError(
-            "Could not reach the registration website. Check the internet connection "
-            "and the website address."
+            f"Could not reach the registration website ({_why(exc)}). Check the internet "
+            "connection and the website address. Settings → Diagnostics shows more."
         ) from exc
 
 
@@ -205,3 +323,170 @@ def pull(cls: dict, embed: Embedder) -> int:
         if not out.get("remaining"):
             break
     return received
+
+
+# ── diagnostics (Settings → Diagnostics) ─────────────────────────────────
+
+def _cert_summary(der: bytes | None) -> str:
+    """Issuer and validity of the certificate the site presented."""
+    if not der:
+        return ""
+    try:
+        import tempfile
+
+        pem = ssl.DER_cert_to_PEM_cert(der)
+        with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as f:
+            f.write(pem)
+            path = f.name
+        try:
+            info = ssl._ssl._test_decode_cert(path)  # noqa: SLF001 - CPython helper, diagnostics only
+        finally:
+            os.unlink(path)
+        issuer = ", ".join(v for part in info.get("issuer", ()) for k, v in part if k in ("organizationName", "commonName"))
+        return f"issued by {issuer}; valid {info.get('notBefore', '?')} to {info.get('notAfter', '?')}"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _timed(fn: Callable[[], str]) -> tuple[str, str, int]:
+    """Run one check → (status, detail, milliseconds)."""
+    import time
+
+    t = time.perf_counter()
+    try:
+        detail = fn()
+        status = "ok"
+    except _Warn as w:
+        status, detail = "warn", str(w)
+    except Exception as exc:  # noqa: BLE001
+        status, detail = "fail", f"{type(exc).__name__}: {exc}"
+    return status, detail, round((time.perf_counter() - t) * 1000)
+
+
+class _Warn(Exception):
+    pass
+
+
+def diagnose(timeout: float = 8.0) -> dict:
+    """Check each step of reaching the website separately, so a failure
+    points at its cause: address, proxy, DNS, connection, certificates,
+    clock, or the website itself."""
+    import time
+    import urllib.parse
+    from email.utils import parsedate_to_datetime
+
+    checks: list[dict] = []
+    hints: list[str] = []
+
+    def add(key: str, title: str, fn: Callable[[], str]) -> str:
+        status, detail, ms = _timed(fn)
+        checks.append({"id": key, "title": title, "status": status, "detail": detail, "ms": ms})
+        return status
+
+    base = server_url()
+    if not base:
+        checks.append({"id": "url", "title": "Website address", "status": "fail",
+                       "detail": "No website address is set.", "ms": 0})
+        return {"url": "", "checks": checks, "hints": ["Enter the registration website address."],
+                "trust_in_use": _working}
+    parts = urllib.parse.urlsplit(base)
+    host = parts.hostname or ""
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    checks.append({"id": "url", "title": "Website address", "status": "ok", "detail": base, "ms": 0})
+
+    proxies = urllib.request.getproxies()
+    proxy = proxies.get(parts.scheme) or proxies.get("https") or proxies.get("http")
+    if proxy and urllib.request.proxy_bypass(host):
+        proxy = None   # this address is excluded from the proxy
+    checks.append({
+        "id": "proxy", "title": "Proxy", "status": "warn" if proxy else "ok",
+        "detail": f"Traffic goes through a proxy: {proxy}" if proxy else "No proxy (direct connection)", "ms": 0,
+    })
+
+    def dns() -> str:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        return ", ".join(sorted({i[4][0] for i in infos})[:4])
+    dns_status = add("dns", f"Look up {host}", dns)
+
+    def tcp() -> str:
+        with socket.create_connection((host, port), timeout=timeout):
+            return f"Connected to port {port}"
+    tcp_status = add("tcp", "Open a connection", tcp) if dns_status == "ok" else "skip"
+
+    tls_ok: list[str] = []
+    if parts.scheme == "https" and tcp_status == "ok":
+        for name, _ in TRUST_OPTIONS:
+            def tls(name: str = name) -> str:
+                ctx = _ctx(name)
+                if ctx is None:
+                    raise _Warn("Not available in this build")
+                with socket.create_connection((host, port), timeout=timeout) as sock:
+                    with ctx.wrap_socket(sock, server_hostname=host) as s:
+                        der = s.getpeercert(binary_form=True)
+                        summary = _cert_summary(der)
+                        tls_ok.append(name)
+                        return f"Certificate accepted ({s.version()}){'; ' + summary if summary else ''}"
+            add(f"tls:{name}", f"Secure connection: {name}", tls)
+
+    server_time: list[datetime] = []
+
+    def health() -> str:
+        req = urllib.request.Request(base + "/api/health", headers={"User-Agent": "Presentia-Desktop"})
+        with _urlopen(req) as res:
+            date = res.headers.get("Date")
+            if date:
+                server_time.append(parsedate_to_datetime(date))
+            body = json.loads(res.read() or b"{}")
+        if not body.get("ok"):
+            raise _Warn("Answered, but this does not look like a Presentia website")
+        return f"Presentia website v{body.get('version', '?')} answered (HTTP 200)"
+    health_status = add("health", "Presentia website answers", health)
+
+    if server_time:
+        skew = (datetime.now().astimezone() - server_time[0]).total_seconds()
+        ok = abs(skew) < 300
+        checks.append({
+            "id": "clock", "title": "Computer clock", "status": "ok" if ok else "fail",
+            "detail": ("Correct" if ok else f"{'Ahead' if skew > 0 else 'Behind'} by "
+                       f"{abs(skew) / 3600:.1f} hours") + f" (this computer: {datetime.now():%Y-%m-%d %H:%M})",
+            "ms": 0,
+        })
+        if not ok:
+            hints.append("This computer's date or time is wrong, which makes security certificates look "
+                         "invalid. Set the clock to update automatically (Windows Settings → Time & language).")
+    else:
+        checks.append({"id": "clock", "title": "Computer clock", "status": "skip",
+                       "detail": f"Could not compare (this computer: {datetime.now():%Y-%m-%d %H:%M})", "ms": 0})
+
+    host_id = db.get_setting(_K_HOST_ID)
+    checks.append({
+        "id": "host", "title": "This app's registration with the website", "status": "ok",
+        "detail": "Registered" if host_id and db.get_setting(_K_HOST_URL) == base
+        else "Not yet (happens the first time online registration is turned on)",
+        "ms": 0,
+    })
+
+    # What to do about it.
+    if dns_status == "fail":
+        hints.append("The website's name could not be looked up: there is no internet connection, or the "
+                     "network blocks it. Try another network (e.g. a phone hotspot).")
+    elif tcp_status == "fail" and (not proxy or health_status != "ok"):
+        hints.append("The website could not be reached on this network"
+                     + (" (directly or through the proxy)" if proxy else "")
+                     + ". A firewall, antivirus or the school network may block it; try another network "
+                     "(e.g. a phone hotspot), or allow Presentia in the firewall/antivirus.")
+    if parts.scheme == "https" and tcp_status == "ok":
+        first = TRUST_OPTIONS[0][0]
+        if not tls_ok:
+            hints.append("No certificate check accepted the website. If the clock is right, something on "
+                         "this network or computer (antivirus web shield, school firewall) is intercepting "
+                         "secure connections. Try another network, or turn off HTTPS scanning in the antivirus.")
+        elif first not in tls_ok:
+            hints.append(f"Windows did not accept the website's certificate, but {tls_ok[0]} did, and "
+                         "Presentia now uses that automatically. Running Windows Update may fix it for good.")
+    if (health_status == "fail" and not hints and dns_status == "ok"):
+        hints.append("The connection works but the website did not answer properly; see the last test. "
+                     "Check the website address in Online registration.")
+    if health_status == "ok" and not hints:
+        hints.append("Everything works: Presentia can reach the registration website.")
+    return {"url": base, "checks": checks, "hints": hints, "trust_in_use": _working}

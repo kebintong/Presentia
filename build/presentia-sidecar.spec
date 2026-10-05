@@ -31,7 +31,9 @@ hiddenimports = []
 # DirectML.dll either way.
 # insightface is no longer used at run time (app/core/face_models.py runs its
 # model files directly), so it and its large dependencies stay out of the build.
-for pkg in ("onnxruntime", "mediapipe", "cv2", "uvicorn"):
+# certifi ships its root list as a data file (cacert.pem); truststore picks a
+# per-OS module at run time. collect_all brings both along.
+for pkg in ("onnxruntime", "mediapipe", "cv2", "uvicorn", "certifi", "truststore"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -55,6 +57,11 @@ hiddenimports += [
     "multipart",
     "websockets",
     "mss",
+    # app.data.cloud imports this inside a try; its per-OS module is chosen at run time.
+    "truststore",
+    "truststore._windows",
+    "truststore._api",
+    "certifi",
 ]
 
 # Presentia's own modules. sidecar.py imports several of these *inside*
@@ -83,6 +90,7 @@ hiddenimports += [
     "app.core.tile_challenge",
     "app.core.stillness",
     "app.core.v4l2_reader",
+    "app.core.diag",
 ]
 
 # Bundle the MediaPipe landmark model that ships in the repo already.

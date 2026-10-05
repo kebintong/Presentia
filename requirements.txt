@@ -11,3 +11,7 @@ fastapi>=0.111
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
 websockets>=12
+# HTTPS for the registration website: Windows' own certificate check first,
+# then a built-in root list for computers that cannot update theirs
+truststore>=0.9
+certifi>=2024.2.2

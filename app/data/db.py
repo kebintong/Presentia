@@ -383,6 +383,15 @@ def find_student_by_no(student_no: str) -> dict | None:
     return dict(row) if row else None
 
 
+def get_student(student_id: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, student_no, name, created_at FROM students WHERE id = ?",
+            (student_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def list_students(class_id: int | None = None) -> list[dict]:
     """All students, or only the roster of one class."""
     with _connect() as conn:
@@ -884,7 +893,7 @@ def list_pending(class_id: int) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT p.id, p.student_no, p.name, p.photo_jpeg, p.samples, p.problem,
+            SELECT p.id, p.student_no, p.name, p.photo_jpeg, p.embedding, p.samples, p.problem,
                    p.submitted_at, p.received_at, p.embedding IS NOT NULL AS has_face,
                    s.id AS existing_id, s.name AS existing_name,
                    EXISTS (SELECT 1 FROM class_students cs
