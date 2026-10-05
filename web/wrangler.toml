@@ -16,7 +16,7 @@ not_found_handling = "404-page"
 [[d1_databases]]
 binding = "DB"
 database_name = "presentia"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "fa970a78-5e73-49a4-930d-fa8adb6b4222"
 
 # Daily clean-up: delete anything not collected within 14 days.
 [triggers]
