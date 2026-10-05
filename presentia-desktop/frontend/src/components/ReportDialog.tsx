@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import Modal from './Modal'
 import {
-  Problem, buildReport, copyText, reportFileName, reportSummary, saveText, sendReport,
+  Problem, buildReport, copyText, getMode, reportFileName, reportSummary, reportsHost, saveText, sendReport,
 } from '../diagnostics'
 
 interface Props {
@@ -65,7 +65,7 @@ export default function ReportDialog({ version, problem, onClose }: Props) {
             <div>
               <div className="settings-info-title">Report ID: <span className="mono">{sent.id}</span></div>
               Tell this ID to whoever looks after Presentia so they can find your report.
-              It is kept on the Presentia website for 30 days.
+              It is kept at {reportsHost(getMode())} for 30 days.
             </div>
           </div>
           <div className="diag-actions">
@@ -84,7 +84,8 @@ export default function ReportDialog({ version, problem, onClose }: Props) {
           <span className="settings-row-sub" style={{ margin: 0 }}>
             This is everything that will be sent. It can include class names, student names and numbers
             that appeared in the log. Your computer user name has been replaced with &lt;you&gt;.
-            Sent reports go to the Presentia website and are deleted after 30 days.
+            Reports are sent to the Presentia team at <span className="mono">{reportsHost(getMode())}</span> and
+            deleted after 30 days.
           </span>
           {text === null && !error && (
             <div className="progress-wrap"><span className="spinner" /><span className="progress-label">Preparing the report…</span></div>

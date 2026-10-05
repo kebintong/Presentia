@@ -77,3 +77,25 @@ def test_quick_report_skips_network(client):
     c, _ = client
     body = c.get("/api/diagnostics", params={"network": False}).json()
     assert body["network"] is None and body["mode"]["enabled"] is False
+
+
+def test_reports_ignore_the_registration_address(client, monkeypatch):
+    """Changing (or breaking) the registration website address must not
+    change where diagnostic reports go."""
+    c, _ = client
+    from app.data import cloud
+
+    monkeypatch.delenv("PRESENTIA_REPORTS_URL", raising=False)
+    monkeypatch.setenv("PRESENTIA_CLOUD_URL", "https://someone-elses-site.example")
+    seen = {}
+
+    def fake_request(method, path, body=None, auth=True, base=None, what=""):
+        seen.update(method=method, path=path, auth=auth, base=base, body=body)
+        return {"id": "R-1", "github": False}
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    assert c.post("/api/diagnostics/send", json={"text": "x"}).json()["id"] == "R-1"
+    assert seen["base"] == cloud.REPORTS_URL.rstrip("/") and seen["path"] == "/api/reports"
+    assert seen["auth"] is False
+    assert len(seen["body"]["install_id"]) == 16
+    assert c.get("/api/diagnostics/mode").json()["reports_url"] == cloud.REPORTS_URL.rstrip("/")

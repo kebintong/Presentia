@@ -17,19 +17,33 @@ interface Pending {
   existing_id: number | null
   existing_name: string | null
   existing_in_class: boolean
-  /** Same face as a registered student with another student number. */
-  face_match: { id: number; student_no: string; name: string; in_class: boolean } | null
-  /** Same face as another registration that is also waiting. */
+  /**
+   * What Accept does (Google Classroom style: one student, many classes):
+   * new      — adds a new student;
+   * join     — adds the student already registered on this computer, with
+   *            their saved face data (matched by number or by face);
+   * in_class — that student is already in this class (nothing to add);
+   * conflict — the number is one student's, the face another's;
+   * number_taken — the number is a registered student's, the face someone else's;
+   * no_face  — new number and no usable face.
+   */
+  action: 'new' | 'join' | 'in_class' | 'conflict' | 'number_taken' | 'no_face'
+  match: { id: number; student_no: string; name: string } | null
+  via: 'number' | 'face' | null
+  conflict_with: { id: number; student_no: string; name: string } | null
+  /** Another waiting registration has the same number but a different face. */
+  number_clash: { name: string; submitted_at: string } | null
+  /** Same face as another NEW registration that is also waiting. */
   pending_match: { student_no: string; name: string } | null
   /** The student number is on file, but with a different face. */
   face_differs: boolean
 }
 
+const canAccept = (p: Pending) => p.action === 'new' || p.action === 'join'
+
 /** Can be accepted without the instructor having to look twice. */
 const isClean = (p: Pending) =>
-  !p.problem && !p.face_match && !p.pending_match && !p.face_differs && (p.has_face || p.existing_id !== null)
-
-const canAccept = (p: Pending) => (p.has_face || p.existing_id !== null) && !p.face_match
+  canAccept(p) && !p.problem && !p.pending_match && !p.number_clash && !p.face_differs
 
 interface Props {
   classInfo: ClassInfo
@@ -192,7 +206,7 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
         const out = await res.json()
         setMessage({
           text: out.result === 'linked'
-            ? `Added ${out.name} using the face data already on file.`
+            ? `Added ${out.name} to ${classInfo.name} with their saved face data.`
             : `Added ${out.name} to ${classInfo.name}.`,
         })
         onRosterChanged()
@@ -208,7 +222,14 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
   }
 
   const acceptAllReady = async () => {
-    const ready = pending.filter(isClean)
+    // The same existing student can only be added once.
+    const seen = new Set<number>()
+    const ready = pending.filter(isClean).filter((p) => {
+      if (!p.match) return true
+      if (seen.has(p.match.id)) return false
+      seen.add(p.match.id)
+      return true
+    })
     for (const p of ready) await decide(p, true)
   }
 
@@ -330,36 +351,54 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
                     <div className="pending-sub">
                       <span className="mono">{p.student_no}</span> · {formatDateTime(p.submitted_at)}
                     </div>
-                    {p.existing_id !== null && (
+                    {p.action === 'join' && p.match && (
                       <div className="pending-note">
-                        {p.existing_in_class
-                          ? `Already in this class as ${p.existing_name}.`
-                          : `Already registered as ${p.existing_name}. Accepting adds them with their saved face data.`}
+                        Already registered as {p.match.name} (<span className="mono">{p.match.student_no}</span>)
+                        {p.via === 'face' ? ', recognised by face' : ''}. Accept adds them to this class with their
+                        saved face data; nothing new is stored.
+                        {p.via === 'face' && ` They typed ${p.student_no}; the saved number is kept.`}
                       </div>
                     )}
-                    {p.face_match && (
+                    {p.action === 'in_class' && p.match && (
+                      <div className="pending-note">
+                        {p.match.name} (<span className="mono">{p.match.student_no}</span>) is already in this class
+                        {p.via === 'face' ? ' (same face)' : ''}. Dismiss this registration.
+                      </div>
+                    )}
+                    {p.action === 'conflict' && p.match && p.conflict_with && (
                       <div className="pending-note danger">
-                        {p.face_match.in_class
-                          ? `Same face as ${p.face_match.name} (${p.face_match.student_no}), who is already in this class. Reject this registration.`
-                          : `Same face as ${p.face_match.name} (${p.face_match.student_no}), who is already registered. Reject this one; to add them, use "Add from other classes".`}
+                        Student number {p.match.student_no} belongs to {p.match.name}, but this face is
+                        {' '}{p.conflict_with.name} ({p.conflict_with.student_no}). Reject it and check with the student.
                       </div>
                     )}
-                    {!p.face_match && p.pending_match && (
+                    {p.action === 'number_taken' && p.match && (
+                      <div className="pending-note danger">
+                        Student number {p.match.student_no} belongs to {p.match.name}, and this is a different
+                        person. Reject it and ask them to check their student number.
+                      </div>
+                    )}
+                    {p.number_clash && (
+                      <div className="pending-note danger">
+                        {p.number_clash.name} also registered with student number {p.student_no}, and it is a
+                        different person. Accept only the one this number really belongs to.
+                      </div>
+                    )}
+                    {p.pending_match && (
                       <div className="pending-note warn">
                         Same face as {p.pending_match.name} ({p.pending_match.student_no}), who is also waiting.
                         Accept only the right one.
                       </div>
                     )}
-                    {p.face_differs && (
+                    {p.face_differs && p.match && p.action !== 'number_taken' && (
                       <div className="pending-note warn">
-                        This face does not match the one on file for {p.existing_name}. Check it is really them.
+                        This face does not match the one on file for {p.match.name}. Check it is really them.
                       </div>
                     )}
                     {p.problem && <div className="pending-note warn">{p.problem}</div>}
                   </div>
                   <div className="pending-buttons">
                     <button className="btn-ghost" onClick={() => decide(p, false)} disabled={busy === `p${p.id}`}>
-                      Reject
+                      {p.action === 'in_class' ? 'Dismiss' : 'Reject'}
                     </button>
                     <button
                       className="btn-primary"
@@ -367,7 +406,9 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
                       disabled={busy === `p${p.id}` || !acceptable}
                       title={
                         acceptable ? 'Add to this class'
-                          : p.face_match ? 'This face is already registered under another student number'
+                          : p.action === 'in_class' ? 'Already in this class'
+                          : p.action === 'conflict' || p.action === 'number_taken'
+                            ? 'The student number belongs to a different person'
                           : 'No usable face — reject and ask them to register again'
                       }
                     >

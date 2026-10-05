@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import OnlineRegistration from '../components/OnlineRegistration'
 import VideoCanvas from '../components/VideoCanvas'
 import { useFrameFeed, frameToBase64, type Frame } from '../components/frameFeed'
 import PipWindow from '../components/PipWindow'
@@ -357,8 +358,8 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
                 ? `This face is already registered as ${match.name} (${match.student_no}), who is in this class.`
                 : `${match.name} (${match.student_no}) is already in this class.`
               : byFace
-                ? `This face is already registered as ${match.name} (${match.student_no}). One person can only be registered once.`
-                : `Student number ${match.student_no} is already registered as ${match.name}.`
+                ? `This face is already registered as ${match.name} (${match.student_no}) in another class. Add them below; their saved face data is reused.`
+                : `Student number ${match.student_no} is already registered as ${match.name} in another class. Add them below; their saved face data is reused.`
           )
           return
         }
@@ -691,6 +692,9 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
           </PipWindow>
         )}
       </section>
+
+      {/* Students can also register themselves on the website with the join code. */}
+      <OnlineRegistration classInfo={classInfo} onRosterChanged={loadStudents} />
     </>
   )
 }

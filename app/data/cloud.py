@@ -33,6 +33,12 @@ from app.data import db
 # app (Students page → Online registration) or with PRESENTIA_CLOUD_URL.
 DEFAULT_URL = "https://presentia.venki050524.workers.dev"
 
+# Where diagnostic reports go. Deliberately NOT the registration website
+# address above: that one can be changed in the app (or point at a school's
+# own copy of the site), and reports must still reach the Presentia team.
+# Change it here (or with PRESENTIA_REPORTS_URL) if reports move elsewhere.
+REPORTS_URL = "https://presentia.venki050524.workers.dev"
+
 TIMEOUT = 20  # seconds per request
 PAGE = 10     # registrations downloaded per request
 THUMB = 160   # px, the picture kept for the instructor to compare
@@ -68,6 +74,10 @@ def set_server_url(url: str) -> str:
             raise CloudError("The website address must start with https://")
     db.set_setting(_K_URL, url or None)
     return server_url()
+
+
+def reports_url() -> str:
+    return (os.environ.get("PRESENTIA_REPORTS_URL") or REPORTS_URL).strip().rstrip("/")
 
 
 def share_link(code: str) -> str:
@@ -188,14 +198,20 @@ def _why(exc: BaseException) -> str:
     return text[:120] or type(reason).__name__
 
 
-def _request(method: str, path: str, body: dict | None = None, auth: bool = True) -> dict:
-    base = server_url()
+def _request(
+    method: str, path: str, body: dict | None = None, auth: bool = True,
+    base: str | None = None, what: str = "the registration website",
+) -> dict:
+    """JSON request to the registration website, or to `base` (the report
+    service) when given. `what` names the site in error messages."""
+    base = base or server_url()
     if not base:
         raise CloudError("Set the registration website address first.")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, method=method)
     req.add_header("Content-Type", "application/json")
     req.add_header("User-Agent", "Presentia-Desktop")
+    req.add_header("X-Presentia-App", "desktop")
     if auth:
         host_id, secret = _credentials()
         req.add_header("Authorization", f"Bearer {host_id}.{secret}")
@@ -214,16 +230,16 @@ def _request(method: str, path: str, body: dict | None = None, auth: bool = True
             db.set_setting(_K_HOST_ID, None)
             db.set_setting(_K_SECRET, None)
         raise CloudError(
-            info.get("message") or f"The website answered with an error ({exc.code}).",
+            info.get("message") or f"{what[0].upper() + what[1:]} answered with an error ({exc.code}).",
             exc.code, info.get("error", ""),
         ) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         print(f"[cloud] {method} {path} failed: {exc!r}", file=sys.stderr, flush=True)
         diag.record("cloud", f"{method} {path}: {exc!r}")
-        raise CloudError(
-            f"Could not reach the registration website ({_why(exc)}). Check the internet "
-            "connection and the website address. Settings → Diagnostics shows more."
-        ) from exc
+        hint = ("Check the internet connection and the website address. Settings → Diagnostics "
+                "shows more." if what == "the registration website" else "Check the internet connection, or copy "
+                "or save the report instead.")
+        raise CloudError(f"Could not reach {what} ({_why(exc)}). {hint}") from exc
 
 
 def _credentials() -> tuple[str, str]:
@@ -330,11 +346,31 @@ def pull(cls: dict, embed: Embedder) -> int:
 REPORT_MAX = 200_000  # characters; the website refuses more
 
 
+_K_INSTALL = "install_id"
+
+
+def install_id() -> str:
+    """A random ID for this install, so reports from one computer can be told
+    apart. It says nothing about the computer or the person."""
+    value = db.get_setting(_K_INSTALL)
+    if not value:
+        import secrets
+
+        value = secrets.token_hex(8)
+        db.set_setting(_K_INSTALL, value)
+    return value
+
+
 def send_report(summary: str, text: str, app_version: str) -> dict:
-    """Upload a diagnostic report the user chose to send. Returns {"id": ...}."""
-    return _request("POST", "/api/host/reports", {
-        "summary": summary[:200], "text": text[-REPORT_MAX:], "app_version": app_version[:40],
-    })
+    """Upload a diagnostic report the user chose to send to the Presentia
+    team (REPORTS_URL, whatever registration website is set). Returns
+    {"id": ...}."""
+    return _request(
+        "POST", "/api/reports",
+        {"summary": summary[:200], "text": text[-REPORT_MAX:], "app_version": app_version[:40],
+         "install_id": install_id()},
+        auth=False, base=reports_url(), what="the Presentia report service",
+    )
 
 
 # ── diagnostics (Settings → Diagnostics) ─────────────────────────────────
@@ -469,6 +505,18 @@ def diagnose(timeout: float = 8.0) -> dict:
     else:
         checks.append({"id": "clock", "title": "Computer clock", "status": "skip",
                        "detail": f"Could not compare (this computer: {datetime.now():%Y-%m-%d %H:%M})", "ms": 0})
+
+    rep = reports_url()
+    if rep and rep != base:
+        def reports() -> str:
+            req = urllib.request.Request(rep + "/api/health", headers={"User-Agent": "Presentia-Desktop"})
+            with _urlopen(req, timeout) as res:
+                json.loads(res.read() or b"{}")
+            return f"{rep} answered"
+        add("reports", "Report service answers", reports)
+    else:
+        checks.append({"id": "reports", "title": "Report service", "status": "ok",
+                       "detail": "Same website as registration", "ms": 0})
 
     host_id = db.get_setting(_K_HOST_ID)
     checks.append({

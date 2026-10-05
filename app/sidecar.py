@@ -168,6 +168,10 @@ class OnlineToggle(BaseModel):
     enabled: bool
 
 
+class DeleteAllData(BaseModel):
+    confirm: str
+
+
 class DiagnosticMode(BaseModel):
     enabled: bool
 
@@ -266,18 +270,18 @@ async def diagnostics(network: bool = True) -> dict:
         "network": net,
         "recent": diag.recent(),
         "log": log_tail(),
-        "mode": diag.mode(),
+        "mode": {**diag.mode(), "reports_url": cloud.reports_url()},
     }
 
 
 @app.get("/api/diagnostics/mode")
 async def diagnostic_mode() -> dict:
-    return diag.mode()
+    return {**diag.mode(), "reports_url": cloud.reports_url()}
 
 
 @app.put("/api/diagnostics/mode")
 async def set_diagnostic_mode(body: DiagnosticMode) -> dict:
-    return diag.set_mode(body.enabled)
+    return {**diag.set_mode(body.enabled), "reports_url": cloud.reports_url()}
 
 
 @app.post("/api/diagnostics/event", status_code=204)
@@ -537,6 +541,34 @@ async def delete_class(class_id: int) -> dict:
     return {"students_removed": db.delete_class(class_id)}
 
 
+# ── All data (Settings → Data) ───────────────────────────────────────────────
+
+@app.get("/api/data/summary")
+async def data_summary() -> dict:
+    return {**db.data_summary(), "data_folder": str(db.DB_PATH.parent)}
+
+
+@app.post("/api/data/delete-all")
+async def delete_all_data(body: DeleteAllData) -> dict:
+    """Delete every class, student (face data included), session and
+    attendance record on this computer. The user must type DELETE."""
+    if body.confirm.strip().upper() != "DELETE":
+        raise HTTPException(status_code=400, detail="Type DELETE to confirm.")
+    # Take online classes off the website first, with anything still waiting
+    # there. If the website can't be reached it deletes it after 14 days anyway.
+    website_problems = []
+    for cls in db.list_classes():
+        if cls.get("online"):
+            try:
+                await asyncio.to_thread(cloud.unpublish, cls["join_code"])
+            except cloud.CloudError as exc:
+                website_problems.append(f"{cls['name']}: {exc.message}")
+    deleted = await asyncio.to_thread(db.delete_all_data)
+    diag.clear_log()
+    diag.log(f"All data deleted: {deleted}.")
+    return {"deleted": deleted, "website_problems": website_problems}
+
+
 # ── Online registration (web/ — students register with the join code) ───────
 
 SAME_PERSON = 0.45  # photos of one registration must match each other this well
@@ -620,6 +652,51 @@ async def sync_class(class_id: int) -> dict:
     return {"received": received, "pending": _require_class(class_id)["pending_count"]}
 
 
+# ── Who a waiting registration is (Google Classroom style) ────────────────────
+# One student, many classes: a student already registered on this computer
+# (same student number, or same face under another number) is simply ADDED to
+# the class with the face data already saved; nothing new is stored. A class
+# never lists the same student twice.
+
+def _resolve_pending(p: dict, face: np.ndarray | None, roster: set[int]) -> dict:
+    """What accepting this registration would do.
+
+    action: "new"      — a new student (face saved)
+            "join"     — an existing student joins this class (saved data reused)
+            "in_class" — that student is already in this class; nothing to do
+            "conflict" — the number is one student's, the face another's
+            "number_taken" — the number is a registered student's, the face
+                         is nobody's on file (a different person)
+            "no_face"  — new student number and no usable face
+    """
+    by_number = db.find_student_by_no(p["student_no"])
+    by_face = _face_owner(face, p["student_no"]) if face is not None else None
+    out: dict = {"action": "new", "match": None, "via": None, "conflict_with": None, "face_differs": False}
+    if by_number and by_face:
+        out.update(action="conflict", match=_brief(by_number), conflict_with=_brief(by_face))
+        return out
+    if by_number and face is not None:
+        saved = db.get_student_embedding(by_number["id"])
+        if saved is not None and float(_unit(saved) @ face) < DUPLICATE_FACE:
+            # The number is a registered student's, but this is someone else.
+            out.update(action="number_taken", match=_brief(by_number), via="number", face_differs=True)
+            return out
+    target = by_number or by_face
+    if target:
+        out.update(
+            action="in_class" if target["id"] in roster else "join",
+            match=_brief(target), via="number" if by_number else "face",
+        )
+        return out
+    if face is None:
+        out["action"] = "no_face"
+    return out
+
+
+def _brief(student: dict) -> dict:
+    return {"id": student["id"], "student_no": student["student_no"], "name": student["name"]}
+
+
 @app.get("/api/classes/{class_id}/pending")
 async def class_pending(class_id: int) -> list[dict]:
     _require_class(class_id)
@@ -634,17 +711,21 @@ async def class_pending(class_id: int) -> list[dict]:
         p["photo_b64"] = base64.b64encode(photo).decode() if photo else ""
         p["has_face"] = bool(p["has_face"])
         p["existing_in_class"] = bool(p["existing_in_class"])
-        p["face_match"] = None     # same face as a registered student (another number)
-        p["pending_match"] = None  # same face as another waiting registration
-        p["face_differs"] = False  # number on file, but a different face
         face = faces.get(p["id"])
-        if face is not None:
-            owner = _face_owner(face, p["student_no"])
-            if owner is not None:
-                p["face_match"] = {
-                    "id": owner["id"], "student_no": owner["student_no"],
-                    "name": owner["name"], "in_class": owner["id"] in roster,
-                }
+        p.update(_resolve_pending(p, face, roster))
+        # Another waiting registration with the same number but not the same
+        # face: two different people typed one student number.
+        p["number_clash"] = None
+        for other in rows:
+            if other["id"] == p["id"] or other["student_no"] != p["student_no"]:
+                continue
+            twin = faces.get(other["id"])
+            if face is None or twin is None or float(face @ twin) < DUPLICATE_FACE:
+                p["number_clash"] = {"name": other["name"], "submitted_at": other["submitted_at"]}
+                break
+        # Two NEW people with one face, both waiting: accept only one of them.
+        p["pending_match"] = None
+        if face is not None and p["action"] == "new":
             for other in rows:
                 twin = faces.get(other["id"])
                 if (other["id"] != p["id"] and twin is not None
@@ -652,10 +733,6 @@ async def class_pending(class_id: int) -> list[dict]:
                         and float(face @ twin) >= DUPLICATE_FACE):
                     p["pending_match"] = {"student_no": other["student_no"], "name": other["name"]}
                     break
-            if p["existing_id"] is not None:
-                saved = db.get_student_embedding(p["existing_id"])
-                if saved is not None and float(_unit(saved) @ face) < DUPLICATE_FACE:
-                    p["face_differs"] = True
         out.append(p)
     return out
 
@@ -664,29 +741,46 @@ async def class_pending(class_id: int) -> list[dict]:
 async def approve_pending(pending_id: int) -> dict:
     """Accept a website registration into its class.
 
-    If the student number is already registered (another class, or in person
-    earlier), that student is added to the class with the face data already
-    on file; nobody is stored twice.
+    A student already registered on this computer (same number, or same
+    face) is added to the class with the face data already saved; nobody is
+    stored twice, and nobody is listed twice in one class.
     """
     p = db.get_pending(pending_id)
     if p is None:
         raise HTTPException(status_code=404, detail="Registration not found")
-    existing = db.find_student_by_no(p["student_no"])
-    if existing is not None:
-        db.add_student_to_class(p["class_id"], existing["id"])
+    face = _unit(np.frombuffer(p["embedding"], dtype=np.float32)) if p["embedding"] is not None else None
+    roster = {s["id"] for s in db.list_students(p["class_id"])}
+    r = _resolve_pending(p, face, roster)
+    m = r["match"]
+    if r["action"] == "conflict":
+        c = r["conflict_with"]
+        raise HTTPException(status_code=409, detail={
+            "code": "conflict",
+            "message": (f"Student number {m['student_no']} belongs to {m['name']}, but this face is "
+                        f"{c['name']} ({c['student_no']}). Reject it and check with the student."),
+        })
+    if r["action"] == "number_taken":
+        raise HTTPException(status_code=409, detail={
+            "code": "number_taken",
+            "message": (f"Student number {m['student_no']} belongs to {m['name']}, and this is a "
+                        "different person. Reject it and ask them to check their student number."),
+        })
+    if r["action"] == "in_class":
+        raise HTTPException(status_code=409, detail={
+            "code": "already_in_class",
+            "message": f"{m['name']} ({m['student_no']}) is already in this class.",
+        })
+    if r["action"] == "join":
+        db.add_student_to_class(p["class_id"], m["id"])
         db.delete_pending(pending_id)
-        return {"result": "linked", "student_id": existing["id"], "name": existing["name"]}
-    if p["embedding"] is None:
+        return {"result": "linked", "student_id": m["id"], "name": m["name"], "via": r["via"]}
+    if r["action"] == "no_face":
         raise HTTPException(
             status_code=422,
             detail=p["problem"] or "No usable face in this registration. Reject it and ask the "
                                    "student to register again.",
         )
-    emb = np.frombuffer(p["embedding"], dtype=np.float32)
-    owner = _face_owner(emb, p["student_no"])
-    if owner is not None:
-        raise _face_exists_error(owner)
-    student_id = db.add_student(p["student_no"], p["name"], emb, p["class_id"])
+    student_id = db.add_student(p["student_no"], p["name"], face, p["class_id"])
     db.delete_pending(pending_id)
     return {"result": "added", "student_id": student_id, "name": p["name"]}
 

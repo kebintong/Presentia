@@ -3,7 +3,7 @@ import Modal from './Modal'
 import ReportDialog from './ReportDialog'
 import {
   DiagMode, DiagnosticsData, STATUS_LABEL, buildReport, copyText, fetchActivityLog, fetchDiagnostics,
-  getMode, onMode, redact, reportFileName, saveText, setDiagnosticMode,
+  getMode, onMode, redact, reportFileName, reportsHost, saveText, setDiagnosticMode,
 } from '../diagnostics'
 
 const fmt = (iso: string | null) =>
@@ -149,11 +149,12 @@ export default function DiagnosticsSettings({ version }: { version: string }) {
           <div className="settings-row-title">Diagnostic report</div>
           <div className="settings-row-sub">
             Details about this computer, the connection to the registration website, recent problems
-            and the activity log, in one text. You see it before anything is sent.
+            and the activity log, in one text. You see it before anything is sent. Reports go to the
+            Presentia team at <span className="mono">{reportsHost(mode)}</span>, whatever registration website is set.
           </div>
         </div>
       </div>
-      <div className="diag-actions">
+      <div className="diag-actions" style={{ justifyContent: 'flex-start' }}>
         <button className="btn-ghost" onClick={() => act('copy-report')}>Copy report</button>
         <button className="btn-ghost" onClick={() => act('save-report')}>Save report…</button>
         <button className="btn-primary" onClick={() => setReporting(true)}>Send report…</button>
@@ -246,7 +247,7 @@ export default function DiagnosticsSettings({ version }: { version: string }) {
                 <li>The log uses <strong>up to about 6 MB</strong> of disk space (older lines are removed), and
                   Presentia does a little extra work writing it.</li>
                 <li>Nothing leaves this computer unless you press <strong>Send report</strong>. Sent reports are
-                  kept on the Presentia website for 30 days.</li>
+                  kept by the Presentia team for 30 days.</li>
               </ul>
             </div>
             <div className="diag-actions">

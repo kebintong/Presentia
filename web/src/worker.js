@@ -21,10 +21,11 @@
  * RETENTION_DAYS.
  */
 
-const VERSION = '1.1.0'
+const VERSION = '1.2.0'
 const RETENTION_DAYS = 14
 const REPORT_DAYS = 30             // diagnostic reports are kept this long
 const REPORT_MAX = 200_000          // characters per diagnostic report
+const ISSUES_PER_DAY = 50           // GitHub issues opened from reports, all senders together
 
 const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/
 const STUDENT_NO_RE = /^[A-Za-z0-9][A-Za-z0-9 ._\-\/]{0,31}$/
@@ -39,7 +40,7 @@ const LIMITS = {
   lookup: [300, 600],     // join-code lookups (guessing one of ~887 million codes stays hopeless)
   register: [120, 3600],  // registrations submitted
   host: [30, 3600],       // new host credentials (one per install; a staff training can share an IP)
-  report: [20, 3600],     // diagnostic reports from the desktop app
+  report: [20, 3600],     // diagnostic reports from the desktop app, per network
 }
 
 // ── small helpers ────────────────────────────────────────────────────────
@@ -105,6 +106,19 @@ async function clientKey(request, purpose) {
 }
 
 /** True when the caller is still within the limit for `purpose`. */
+/** A limit shared by everyone (not per network), e.g. GitHub issues per day. */
+async function allowGlobal(env, key, limit, windowSec) {
+  const now = Math.floor(Date.now() / 1000)
+  const row = await env.DB.prepare(
+    `INSERT INTO rate_limits (key, count, window_start) VALUES (?1, 1, ?2)
+     ON CONFLICT(key) DO UPDATE SET
+       count        = CASE WHEN window_start <= ?2 - ?3 THEN 1  ELSE count + 1   END,
+       window_start = CASE WHEN window_start <= ?2 - ?3 THEN ?2 ELSE window_start END
+     RETURNING count`
+  ).bind(`global:${key}`, now, windowSec).first()
+  return !row || row.count <= limit
+}
+
 async function allow(env, request, purpose) {
   const [limit, windowSec] = LIMITS[purpose]
   const key = await clientKey(request, purpose)
@@ -155,6 +169,20 @@ async function getClass(env, request, rawCode) {
   if (!cls) return fail(404, 'not_found', 'That join code does not exist. Check it with your teacher.')
   if (!cls.open) return fail(403, 'closed', 'This class is not accepting registrations right now.')
   return json({ code: cls.code, name: cls.name, section: cls.section })
+}
+
+/** Adds registrations.device_hash to databases created before it existed.
+ *  Runs once per Worker instance; "duplicate column" means it is there. */
+let deviceColumnReady = false
+
+async function ensureDeviceColumn(env) {
+  if (deviceColumnReady) return
+  try {
+    await env.DB.prepare('ALTER TABLE registrations ADD COLUMN device_hash TEXT').run()
+  } catch (err) {
+    if (!/duplicate column/i.test(String(err && err.message))) throw err
+  }
+  deviceColumnReady = true
 }
 
 async function submitRegistration(env, request) {
@@ -211,19 +239,34 @@ async function submitRegistration(env, request) {
 
   const id = randomHex(16)
   const now = nowIso()
-  // Submitting again replaces the earlier, uncollected submission.
+  // The browser sends a random ID it keeps (localStorage); only its hash is
+  // stored. Submitting again from the SAME phone or browser replaces the
+  // earlier, uncollected submission (a retake). Someone else using a student
+  // ID that is already waiting is refused instead of overwriting it.
+  const device = String(body.device || '')
+  if (!/^[0-9a-f]{32}$/.test(device)) {
+    return fail(400, 'old_page', 'Reload this page and try again.')
+  }
+  const deviceHash = await sha256Hex(`device:${device}`)
+  await ensureDeviceColumn(env)
   const old = await env.DB.prepare(
-    'SELECT id FROM registrations WHERE class_code = ?1 AND student_no = ?2'
+    'SELECT id, device_hash FROM registrations WHERE class_code = ?1 AND student_no = ?2'
   ).bind(code, studentNo).first()
+  if (old && old.device_hash && !sameHex(old.device_hash, deviceHash)) {
+    return fail(409, 'number_waiting',
+      `Student ID ${studentNo} already has a registration waiting for your teacher in this class, ` +
+      'sent from another phone or computer. Check that you typed your own student ID. If it is yours ' +
+      'and you did not register before, tell your teacher so they can reject the other one.')
+  }
   const stmts = []
   if (old) {
     stmts.push(env.DB.prepare('DELETE FROM photos WHERE registration_id = ?1').bind(old.id))
     stmts.push(env.DB.prepare('DELETE FROM registrations WHERE id = ?1').bind(old.id))
   }
   stmts.push(env.DB.prepare(
-    `INSERT INTO registrations (id, class_code, student_no, name, consent_at, liveness, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
-  ).bind(id, code, studentNo, name, now, liveness, now))
+    `INSERT INTO registrations (id, class_code, student_no, name, consent_at, liveness, created_at, device_hash)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`
+  ).bind(id, code, studentNo, name, now, liveness, now, deviceHash))
   cleaned.forEach((data, idx) => {
     stmts.push(env.DB.prepare('INSERT INTO photos (registration_id, idx, data) VALUES (?1, ?2, ?3)')
       .bind(id, idx, data))
@@ -329,6 +372,10 @@ async function deleteRegistration(env, host, id) {
 
 // ── diagnostic reports (desktop app → Settings → Diagnostics) ───────────
 //
+// POST /api/reports. The desktop app sends reports to a fixed address of its
+// own (REPORTS_URL in app/data/cloud.py), not to whatever registration
+// website it is set to, so no login is involved: the endpoint is public,
+// checks the app header, and is limited per network and in size.
 // Stored in D1 for REPORT_DAYS days. Read them in the Cloudflare dashboard:
 //   SELECT id, created_at, app_version, summary FROM reports ORDER BY created_at DESC;
 // Optionally also opened as a GitHub issue: set the secrets GITHUB_TOKEN
@@ -343,7 +390,7 @@ async function ensureReportsTable(env) {
   await env.DB.prepare(
     `CREATE TABLE IF NOT EXISTS reports (
        id          TEXT PRIMARY KEY,
-       host_id     TEXT,
+       host_id     TEXT,             -- the sending install's random ID
        created_at  TEXT NOT NULL,
        app_version TEXT NOT NULL DEFAULT '',
        summary     TEXT NOT NULL DEFAULT '',
@@ -358,7 +405,12 @@ function oneLine(raw, max) {
   return cleanName(raw).slice(0, max)
 }
 
-async function submitReport(env, request, host, ctx) {
+async function submitReport(env, request, ctx, host = null) {
+  // `host` is set for the older route (desktop app 1.5.2 sends to
+  // /api/host/reports with its website credentials).
+  if (!host && request.headers.get('X-Presentia-App') !== 'desktop') {
+    return fail(400, 'not_the_app', 'Reports are sent from the Presentia desktop app.')
+  }
   const { body, error } = await readJson(request, REPORT_MAX * 4 + 10_000)
   if (error) return error
   if (!(await allow(env, request, 'report'))) {
@@ -368,6 +420,7 @@ async function submitReport(env, request, host, ctx) {
   if (!text.trim()) return fail(400, 'empty', 'The report is empty.')
   const summary = oneLine(body.summary, 200)
   const version = oneLine(body.app_version, 40)
+  const install = /^[0-9a-f]{16}$/.test(String(body.install_id || '')) ? body.install_id : (host ? host.id : null)
   await ensureReportsTable(env)
   let id = ''
   for (let i = 0; i < 3 && !id; i++) {
@@ -375,11 +428,12 @@ async function submitReport(env, request, host, ctx) {
     const res = await env.DB.prepare(
       `INSERT OR IGNORE INTO reports (id, host_id, created_at, app_version, summary, body)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6)`
-    ).bind(candidate, host.id, nowIso(), version, summary, text).run()
+    ).bind(candidate, install, nowIso(), version, summary, text).run()
     if (res.meta && res.meta.changes) id = candidate
   }
   if (!id) return fail(500, 'server_error', 'Could not store the report. Try again.')
-  const github = !!(env.GITHUB_TOKEN && env.REPORTS_REPO)
+  const github = !!(env.GITHUB_TOKEN && env.REPORTS_REPO) &&
+    (await allowGlobal(env, 'github-issues', ISSUES_PER_DAY, 86_400))
   if (github) ctx.waitUntil(openIssue(env, { id, summary, version, text }).catch((e) => console.error(e)))
   return json({ id, github }, 201)
 }
@@ -434,6 +488,7 @@ async function handleApi(request, env, url, ctx) {
   }
   if (pathname === '/api/registrations' && method === 'POST') return submitRegistration(env, request)
 
+  if (pathname === '/api/reports' && method === 'POST') return submitReport(env, request, ctx)
   if (pathname === '/api/host/register' && method === 'POST') return registerHost(env, request)
 
   if (pathname.startsWith('/api/host/')) {
@@ -449,7 +504,8 @@ async function handleApi(request, env, url, ctx) {
     if ((m = pathname.match(/^\/api\/host\/registrations\/([^/]+)$/)) && method === 'DELETE') {
       return deleteRegistration(env, host, m[1])
     }
-    if (pathname === '/api/host/reports' && method === 'POST') return submitReport(env, request, host, ctx)
+    // Reports from desktop app 1.5.2 (newer versions use POST /api/reports).
+    if (pathname === '/api/host/reports' && method === 'POST') return submitReport(env, request, ctx, host)
   }
   return fail(404, 'not_found', 'Unknown endpoint.')
 }

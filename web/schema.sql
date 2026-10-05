@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS registrations (
     consent_at  TEXT NOT NULL,             -- when the student agreed to the privacy notice
     liveness    TEXT NOT NULL DEFAULT '{}',-- summary of the browser check (JSON)
     created_at  TEXT NOT NULL,
+    device_hash TEXT,                      -- hash of the submitting browser's random ID (retakes replace)
     UNIQUE (class_code, student_no)
 );
 CREATE INDEX IF NOT EXISTS idx_registrations_created ON registrations(created_at);
@@ -60,7 +61,7 @@ CREATE TABLE IF NOT EXISTS rate_limits (
 -- Kept 30 days. The Worker also creates this table itself if it is missing.
 CREATE TABLE IF NOT EXISTS reports (
     id          TEXT PRIMARY KEY,
-    host_id     TEXT,
+    host_id     TEXT,                  -- the sending install's random ID
     created_at  TEXT NOT NULL,
     app_version TEXT NOT NULL DEFAULT '',
     summary     TEXT NOT NULL DEFAULT '',

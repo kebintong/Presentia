@@ -353,6 +353,68 @@ def delete_class(class_id: int) -> int:
     return removed
 
 
+# ------------------------------------------------------- all data (Settings)
+
+# Everything about classes and students, children first. App settings (the
+# website address, this install's website credentials, preferences) stay.
+_DATA_TABLES = (
+    "events", "attendance", "sessions", "pending_students",
+    "class_students", "students", "classes",
+)
+
+
+def data_summary() -> dict:
+    """What is stored, for Settings → Data."""
+    with _connect() as conn:
+        count = lambda t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]  # noqa: E731
+        out = {
+            "classes": count("classes"),
+            "students": count("students"),
+            "sessions": count("sessions"),
+            "attendance": count("attendance"),
+            "pending": count("pending_students"),
+        }
+    size = 0
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            size += Path(f"{DB_PATH}{suffix}").stat().st_size
+        except OSError:
+            pass
+    out["database_bytes"] = size
+    return out
+
+
+def delete_all_data() -> dict:
+    """Delete every class, student (with face data), session, attendance
+    record, event and waiting registration. Then rewrite the database file
+    so the deleted face data does not linger in unused pages on disk.
+    Returns how much of each was deleted."""
+    before = data_summary()
+    conn = _connect()
+    conn.isolation_level = None
+    try:
+        # Overwrite deleted rows with zeros (not every SQLite build does by
+        # default); VACUUM below then rebuilds the file without free pages.
+        conn.execute("PRAGMA secure_delete = ON")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for table in _DATA_TABLES:
+                conn.execute(f"DELETE FROM {table}")
+            conn.execute(
+                "DELETE FROM sqlite_sequence WHERE name IN (%s)" % ",".join("?" * len(_DATA_TABLES)),
+                _DATA_TABLES,
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+    before.pop("database_bytes", None)
+    return before
+
+
 # ---------------------------------------------------------------- students
 
 def add_student(
@@ -861,19 +923,35 @@ def new_join_code() -> str:
         return _new_join_code(conn)
 
 
+# Two face templates at least this similar are the same person. Same value as
+# MATCH_THRESHOLD in app/core/face_engine.py (attendance matching).
+SAME_FACE = 0.45
+
+
 def add_pending(
     class_id: int, remote_id: str, student_no: str, name: str,
     embedding: np.ndarray | None, photo_jpeg: bytes | None, samples: int,
     problem: str, submitted_at: str,
 ) -> bool:
-    """Store a downloaded registration. False if it was already stored."""
+    """Store a downloaded registration. False if it was already stored.
+
+    A newer submission replaces a waiting one with the same student number
+    only when it is the same face (a retake). A different face is a
+    different person: both are kept, and the app flags the clash."""
     blob = embedding.astype(np.float32).tobytes() if embedding is not None else None
     with _connect() as conn:
-        # A newer submission from the same student replaces the waiting one.
-        conn.execute(
-            "DELETE FROM pending_students WHERE class_id = ? AND student_no = ?",
-            (class_id, student_no),
-        )
+        if embedding is not None:
+            new = embedding.astype(np.float32)
+            new = new / (np.linalg.norm(new) or 1.0)
+            waiting = conn.execute(
+                "SELECT id, embedding FROM pending_students "
+                "WHERE class_id = ? AND student_no = ? AND embedding IS NOT NULL",
+                (class_id, student_no),
+            ).fetchall()
+            for row in waiting:
+                old = np.frombuffer(row["embedding"], dtype=np.float32)
+                if old.size == new.size and float(old @ new) / (np.linalg.norm(old) or 1.0) >= SAME_FACE:
+                    conn.execute("DELETE FROM pending_students WHERE id = ?", (row["id"],))
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO pending_students

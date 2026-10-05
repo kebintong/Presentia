@@ -2626,3 +2626,8 @@ select.input option {
 .problem-actions { display: flex; gap: 6px; align-items: center; }
 .problem-actions .btn-ghost, .problem-actions .btn-primary { padding: 6px 10px; font-size: 12px; }
 .problem-count { flex: 1; font-size: 11px; color: var(--muted-lo); }
+
+/* Settings → Data: the delete button sits in a red-tinted row. */
+.danger-row { border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: var(--missing-dim); }
+.danger-row .btn-danger { flex: none; padding: 8px 14px; font-size: 12.5px; }
+.diag-confirm .input { width: 100%; }

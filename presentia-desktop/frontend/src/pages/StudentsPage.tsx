@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Modal from '../components/Modal'
 import ReuseStudentsModal from '../components/ReuseStudentsModal'
-import OnlineRegistration from '../components/OnlineRegistration'
 import { SaveExcelToFile } from '../../wailsjs/go/main/App'
 import { ClassInfo, formatDateTime, formatDay, formatTime, shortDate } from '../classes'
 
@@ -327,8 +326,6 @@ export default function StudentsPage({ classInfo }: { classInfo: ClassInfo }) {
           </div>
         )}
       </section>
-
-      <OnlineRegistration classInfo={classInfo} onRosterChanged={load} />
 
       <div className="stats-grid">
         {statCard('Students', all.length)}

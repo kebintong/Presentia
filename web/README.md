@@ -94,7 +94,10 @@ SELECT id, created_at, app_version, summary FROM reports ORDER BY created_at DES
 SELECT body FROM reports WHERE id = 'R-91708279';
 ```
 
-Only installs of the desktop app (with their own credentials) can send reports, at most 20 per hour per network.
+The desktop app sends reports to a fixed address of their own (`REPORTS_URL` in `app/data/cloud.py`), so changing
+the registration website address in the app does not affect them. The endpoint (`POST /api/reports`) needs no
+login; it only accepts requests from the app, at most 20 per hour per network and 200,000 characters each, and
+opens at most 50 GitHub issues a day in total. `host_id` holds the sending install's random ID.
 
 ### Optional: also open a GitHub issue for each report
 

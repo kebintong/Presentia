@@ -27,6 +27,13 @@ export interface DiagMode {
   until: string | null
   expired: boolean
   log_path: string
+  /** Where reports are sent: fixed, separate from the registration website. */
+  reports_url?: string
+}
+
+/** "presentia.example.workers.dev" from the report address. */
+export function reportsHost(m: DiagMode = mode): string {
+  try { return m.reports_url ? new URL(m.reports_url).host : 'the Presentia report service' } catch { return 'the Presentia report service' }
 }
 
 // ── diagnostic mode state ──────────────────────────────────────────────────

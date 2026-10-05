@@ -4,6 +4,7 @@ import PresentiaLogo from './PresentiaLogo'
 import PerformanceSettings from './PerformanceSettings'
 import AccessibilitySettings from './AccessibilitySettings'
 import DiagnosticsSettings from './DiagnosticsSettings'
+import DataSettings from './DataSettings'
 
 export interface UpdateInfo {
   available: boolean
@@ -15,7 +16,7 @@ export interface UpdateInfo {
 }
 
 type Phase = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
-type Tab = 'appearance' | 'performance' | 'accessibility' | 'updates' | 'diagnostics'
+type Tab = 'appearance' | 'performance' | 'accessibility' | 'updates' | 'data' | 'diagnostics'
 
 const TAB_KEY = 'presentia.settingsTab'
 const TABS: { id: Tab; label: string }[] = [
@@ -23,6 +24,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'performance', label: 'Performance' },
   { id: 'accessibility', label: 'Accessibility' },
   { id: 'updates', label: 'Updates' },
+  { id: 'data', label: 'Data' },
   { id: 'diagnostics', label: 'Diagnostics' },
 ]
 
@@ -230,6 +232,7 @@ export default function SettingsPanel({
         {tab === 'accessibility' && <AccessibilitySettings />}
 
         {/* ── Software updates ─────────────────────────────────── */}
+        {tab === 'data' && <DataSettings />}
         {tab === 'diagnostics' && <DiagnosticsSettings version={version} />}
 
         {tab === 'updates' && (

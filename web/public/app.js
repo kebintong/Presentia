@@ -4,6 +4,26 @@ import { Challenge, createTracker, takePhoto, PROMPTS } from '/liveness.js'
 const $ = (id) => document.getElementById(id)
 const STEPS = ['code', 'details', 'camera', 'review', 'done']
 
+// A random ID for this phone or browser, kept between visits. It only lets a
+// student redo their own registration (a retake replaces it); someone else
+// typing the same student ID cannot overwrite it. It identifies nothing else.
+function deviceId() {
+  const fresh = () => [...crypto.getRandomValues(new Uint8Array(16))]
+    .map((b) => b.toString(16).padStart(2, '0')).join('')
+  try {
+    let id = localStorage.getItem('presentia-device')
+    if (!/^[0-9a-f]{32}$/.test(id || '')) {
+      id = fresh()
+      localStorage.setItem('presentia-device', id)
+    }
+    return id
+  } catch {
+    // Private browsing etc.: still works for retakes until the page is closed.
+    if (!window.__presentiaDevice) window.__presentiaDevice = fresh()
+    return window.__presentiaDevice
+  }
+}
+
 const state = {
   code: '',
   cls: null,          // { code, name, section }
@@ -58,7 +78,11 @@ async function api(path, options = {}) {
     throw new Error('No connection. Check your internet and try again.')
   }
   const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(body.message || `Something went wrong (${res.status}).`)
+  if (!res.ok) {
+    const err = new Error(body.message || `Something went wrong (${res.status}).`)
+    err.code = body.error || ''
+    throw err
+  }
   return body
 }
 
@@ -124,7 +148,18 @@ $('details-form').addEventListener('submit', (e) => {
   setError('details-error', '')
   state.studentNo = no
   state.name = name
+  if (state.photos.length && state.liveness) {
+    finishCheck()   // came back only to fix the student ID: keep the photos
+    return
+  }
   show('camera')
+})
+
+$('change-no').addEventListener('click', () => {
+  $('change-no').hidden = true
+  show('details')
+  $('student-no').focus()
+  $('student-no').select()
 })
 
 // ── 3. face check ─────────────────────────────────────────────────────────
@@ -278,6 +313,7 @@ $('camera-start').addEventListener('click', () => {
 
 function finishCheck() {
   stopCamera()
+  $('change-no').hidden = true
   const shots = $('shots')
   shots.innerHTML = ''
   for (const p of state.photos) {
@@ -321,6 +357,7 @@ $('submit').addEventListener('click', async () => {
         consent: true,
         photos: state.photos,
         liveness: state.liveness,
+        device: deviceId(),
       }),
     })
     $('done-text').textContent =
@@ -330,6 +367,9 @@ $('submit').addEventListener('click', async () => {
     show('done')
   } catch (err) {
     setError('submit-error', err.message)
+    // A student ID someone else already used: let them correct it without
+    // taking the photos again.
+    $('change-no').hidden = err.code !== 'number_waiting'
   } finally {
     btn.disabled = false
     btn.textContent = 'Submit registration'
