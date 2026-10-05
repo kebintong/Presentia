@@ -26,7 +26,7 @@ from app.data import db
 # The website address. Set this to your deployed site (see web/README.md) so
 # every install uses it without configuration; it can also be changed in the
 # app (Students page → Online registration) or with PRESENTIA_CLOUD_URL.
-DEFAULT_URL = ""
+DEFAULT_URL = "https://presentia.venki050524.workers.dev"
 
 TIMEOUT = 20  # seconds per request
 PAGE = 10     # registrations downloaded per request
