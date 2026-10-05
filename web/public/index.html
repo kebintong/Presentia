@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Presentia — Join your class</title>
+  <meta name="description" content="Register for your class's Presentia attendance with your join code.">
+  <meta name="theme-color" content="#0F1729" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F5F7FA" media="(prefers-color-scheme: light)">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/img/icon-192.png">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Presentia home">
+      <picture>
+        <source srcset="/img/mark-dark.png" media="(prefers-color-scheme: dark)">
+        <img src="/img/mark-light.png" alt="" width="17" height="26">
+      </picture>
+      <span>Presentia</span>
+    </a>
+    <span class="header-tag">Class registration</span>
+  </header>
+
+  <main id="app">
+    <ol class="progress" aria-label="Registration steps">
+      <li data-for="code">Join code</li>
+      <li data-for="details">Your details</li>
+      <li data-for="camera">Face check</li>
+      <li data-for="review">Submit</li>
+    </ol>
+
+    <!-- 1. Join code -->
+    <section class="step" data-step="code">
+      <h1>Join your class</h1>
+      <p class="lead">Enter the join code your teacher gave you. It looks like <span class="mono">K7M-Q2P</span>.</p>
+      <form id="code-form" novalidate>
+        <label class="field-label" for="code">Join code</label>
+        <input id="code" class="input code-input" name="code" autocomplete="off" autocapitalize="characters"
+               spellcheck="false" inputmode="text" maxlength="7" placeholder="ABC-123" required>
+        <p class="error" id="code-error" role="alert" hidden></p>
+        <button class="btn btn-primary btn-block" type="submit" id="code-submit">Continue</button>
+      </form>
+    </section>
+
+    <!-- 2. Details + consent -->
+    <section class="step" data-step="details" hidden>
+      <div class="class-banner">
+        <div>
+          <span class="class-banner-label">You're joining</span>
+          <strong id="class-name"></strong>
+          <span id="class-section" class="class-banner-section"></span>
+        </div>
+        <button class="btn btn-ghost btn-small" type="button" data-go="code">Change</button>
+      </div>
+      <h1>Your details</h1>
+      <form id="details-form" novalidate>
+        <label class="field-label" for="student-no">Student ID number</label>
+        <input id="student-no" class="input" name="student_no" autocomplete="off" maxlength="32"
+               placeholder="e.g. 2024-00123" required>
+        <label class="field-label" for="full-name">Full name</label>
+        <input id="full-name" class="input" name="name" autocomplete="name" maxlength="80"
+               placeholder="As it appears on your school records" required>
+
+        <div class="consent">
+          <input type="checkbox" id="consent" required>
+          <label for="consent">
+            I agree that Presentia may take three photos of my face so my teacher's attendance app
+            can recognise me in class. The photos are deleted from this website as soon as my
+            teacher's app collects them, and after 14 days at the latest.
+            <a href="/privacy.html" target="_blank" rel="noopener">Read the privacy notice</a>.
+          </label>
+        </div>
+        <p class="error" id="details-error" role="alert" hidden></p>
+        <div class="actions">
+          <button class="btn btn-ghost" type="button" data-go="code">Back</button>
+          <button class="btn btn-primary" type="submit">Continue</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 3. Live face check -->
+    <section class="step" data-step="camera" hidden>
+      <h1>Face check</h1>
+      <p class="lead" id="camera-lead">Follow the prompts on screen. It takes about 20 seconds and shows
+        your teacher that it's really you, live.</p>
+
+      <div class="stage" id="stage">
+        <video id="video" playsinline muted autoplay></video>
+        <svg class="oval" viewBox="0 0 300 400" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <mask id="hole">
+              <rect width="300" height="400" fill="white"/>
+              <ellipse cx="150" cy="190" rx="105" ry="140" fill="black"/>
+            </mask>
+          </defs>
+          <rect width="300" height="400" class="oval-dim" mask="url(#hole)"/>
+          <ellipse cx="150" cy="190" rx="105" ry="140" class="oval-ring" id="oval-ring"/>
+        </svg>
+        <div class="stage-idle" id="stage-idle">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9a2 2 0 0 1 2-2h.93a2 2 0 0 0 1.66-.89l.82-1.22A2 2 0 0 1 10.07 4h3.86a2 2 0 0 1 1.66.89l.82 1.22A2 2 0 0 0 18.07 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3"/></svg>
+          <span>Your camera will appear here</span>
+        </div>
+        <div class="prompt" id="prompt" aria-live="assertive"></div>
+      </div>
+
+      <div class="check-meta">
+        <ol class="dots" id="dots" aria-hidden="true"></ol>
+        <span id="check-status" class="check-status"></span>
+      </div>
+
+      <ul class="tips" id="tips">
+        <li>Face a window or a lamp so your face is well lit.</li>
+        <li>Take off caps, sunglasses and face masks.</li>
+        <li>Hold your phone at eye level, about an arm's length away.</li>
+      </ul>
+      <p class="error" id="camera-error" role="alert" hidden></p>
+      <div class="actions">
+        <button class="btn btn-ghost" type="button" data-go="details">Back</button>
+        <button class="btn btn-primary" type="button" id="camera-start">Start camera</button>
+      </div>
+    </section>
+
+    <!-- 4. Review + submit -->
+    <section class="step" data-step="review" hidden>
+      <h1>Check and submit</h1>
+      <div class="shots" id="shots"></div>
+      <dl class="summary">
+        <dt>Class</dt><dd id="sum-class"></dd>
+        <dt>Student ID</dt><dd id="sum-no" class="mono"></dd>
+        <dt>Name</dt><dd id="sum-name"></dd>
+      </dl>
+      <p class="error" id="submit-error" role="alert" hidden></p>
+      <div class="actions">
+        <button class="btn btn-ghost" type="button" id="retake">Retake photos</button>
+        <button class="btn btn-primary" type="button" id="submit">Submit registration</button>
+      </div>
+    </section>
+
+    <!-- 5. Done -->
+    <section class="step done" data-step="done" hidden>
+      <div class="done-icon" aria-hidden="true">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      </div>
+      <h1>You're registered</h1>
+      <p class="lead" id="done-text"></p>
+      <p class="muted">You can close this page. If your details were wrong, register again with the same
+        student ID before your teacher accepts it — the new one replaces the old.</p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <a href="/privacy.html">Privacy notice</a>
+    <span>Photos are deleted after your teacher's app collects them, or after 14 days.</span>
+  </footer>
+  <noscript><p class="noscript">This page needs JavaScript to use your camera.</p></noscript>
+</body>
+</html>

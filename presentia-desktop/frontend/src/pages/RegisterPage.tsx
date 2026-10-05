@@ -4,6 +4,7 @@ import { useFrameFeed, frameToBase64, type Frame } from '../components/frameFeed
 import PipWindow from '../components/PipWindow'
 import CameraViewControls, { useCameraView } from '../components/CameraViewControls'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+import { ClassInfo, formatJoinCode } from '../classes'
 
 const goApp = () => (window as any)['go']?.['main']?.['App']
 
@@ -27,11 +28,16 @@ interface EnrollStep {
 
 const POSE_LABELS = ['Straight', 'Left', 'Right', 'Up', 'Blink']
 
-export default function RegisterPage() {
+interface RegisterPageProps {
+  classInfo: ClassInfo
+  /** Go to the Students page (roster, attendance, removing students). */
+  onOpenStudents?: () => void
+}
+
+export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPageProps) {
   const [studentNo, setStudentNo]       = useState('')
   const [name, setName]                 = useState('')
   const [students, setStudents]         = useState<Student[]>([])
-  const [searchQuery, setSearchQuery]   = useState('')
   // Live frames go straight from the socket to the canvas (see frameFeed);
   // React only tracks whether there is a picture at all.
   const feed = useFrameFeed()
@@ -68,16 +74,41 @@ export default function RegisterPage() {
   }, [cameraView])
   const prevCountRef = useRef<number>(-1)
 
+  // Saving hit a student number that is already on file (usually someone
+  // from another class): offer to add that student instead of a duplicate.
+  const [existingMatch, setExistingMatch] = useState<Student | null>(null)
+  const [reuseBusy, setReuseBusy]       = useState<number | null>(null)
+
   const loadStudents = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/students`)
+      const res = await fetch(`${API}/api/students?class_id=${classInfo.id}`)
       if (res.ok) {
         setStudents(await res.json())
       }
     } catch {
       // Backend starting
     }
-  }, [])
+  }, [classInfo.id])
+
+  /** Put an already-registered student on this class's roster. */
+  const addExisting = async (student: Student): Promise<boolean> => {
+    setReuseBusy(student.id)
+    try {
+      const res = await fetch(`${API}/api/classes/${classInfo.id}/students/${student.id}`, { method: 'PUT' })
+      if (!res.ok) {
+        setStatusMsg(`Error: could not add ${student.name} (HTTP ${res.status}).`)
+        return false
+      }
+      setStatusMsg(`Added ${student.name} to ${classInfo.name} using their saved face data.`)
+      loadStudents()
+      return true
+    } catch (err: any) {
+      setStatusMsg(`Error: ${err.message}`)
+      return false
+    } finally {
+      setReuseBusy(null)
+    }
+  }
 
   useEffect(() => {
     loadStudents()
@@ -309,19 +340,28 @@ export default function RegisterPage() {
           student_no: studentNo.trim(),
           name: name.trim(),
           embedding_b64: embeddingB64,
+          class_id: classInfo.id,
         }),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
-        const detail = String(err.detail || 'Failed to save')
-        setStatusMsg(
-          detail.includes('UNIQUE')
-            ? `Error: student number ${studentNo.trim()} is already registered.`
-            : `Error: ${detail}`
-        )
+        const detail = err.detail
+        if (res.status === 409 && detail?.code === 'student_exists') {
+          const match: Student = detail.student
+          const inClass = students.some((st) => st.id === match.id)
+          setExistingMatch(inClass ? null : match)
+          setStatusMsg(
+            inClass
+              ? `${match.name} (${match.student_no}) is already in this class.`
+              : `Student number ${match.student_no} is already registered as ${match.name}.`
+          )
+          return
+        }
+        setStatusMsg(`Error: ${typeof detail === 'string' ? detail : detail?.message || 'Failed to save'}`)
         return
       }
       setStatusMsg(`Saved ${name.trim()} successfully!`)
+      setExistingMatch(null)
       setStudentNo('')
       setName('')
       setEmbeddingB64(null)
@@ -338,28 +378,25 @@ export default function RegisterPage() {
     }
   }
 
-  const deleteStudent = async (id: number, studentName: string) => {
-    if (!confirm(`Delete ${studentName}?`)) return
-    try {
-      const res = await fetch(`${API}/api/students/${id}`, { method: 'DELETE' })
-      if (res.ok) {
-        loadStudents()
-        setStatusMsg(`Deleted ${studentName}`)
-      }
-    } catch (err: any) {
-      setStatusMsg(`Error: ${err.message}`)
+  const addExistingMatch = async () => {
+    if (!existingMatch) return
+    if (await addExisting(existingMatch)) {
+      // The new capture is not needed: the saved face data is used.
+      setExistingMatch(null)
+      setStudentNo('')
+      setName('')
+      setEmbeddingB64(null)
+      setCanSave(false)
+      setProgress(null)
+      setFrame(null)
+      setCompletedSteps(new Set())
+      prevCountRef.current = -1
     }
   }
 
   // stepIdx = the index of the step currently being captured (0-based)
   // progress.count = how many samples have been collected so far
   const stepIdx = progress ? progress.count : -1
-
-  const filteredStudents = students.filter(
-    (s) =>
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.student_no.toLowerCase().includes(searchQuery.toLowerCase())
-  )
 
   return (
     <>
@@ -368,11 +405,18 @@ export default function RegisterPage() {
         <div className="hero-top-row">
           <div className="hero-title-group">
             <h1 className="hero-title">Presentia</h1>
-            <p className="hero-subtitle">Biometric Facial Registration & Enrollment</p>
+            <p className="hero-subtitle">
+              Register students for <strong style={{ color: 'var(--ink)' }}>{classInfo.name}</strong>
+              <span title="Students will use this code to register online"> · Join code {formatJoinCode(classInfo.join_code)}</span>
+            </p>
           </div>
 
           <div className="hero-action-cluster">
-            <div className="hero-status-pill">
+            <button
+              className="hero-status-pill hero-pill-link"
+              onClick={onOpenStudents}
+              title="See and manage everyone in this class"
+            >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
                 <circle cx="9" cy="7" r="4" />
@@ -380,7 +424,7 @@ export default function RegisterPage() {
                 <path d="M16 3.13a4 4 0 0 1 0 7.75" />
               </svg>
               <span>{students.length} Enrolled</span>
-            </div>
+            </button>
 
             {canSave ? (
               <button className="btn-hero-launch" onClick={saveStudent} disabled={loading}>
@@ -551,6 +595,23 @@ export default function RegisterPage() {
             <div style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--card-row-bg)', fontSize: 12, color: 'var(--muted)' }}>
               {statusMsg}
             </div>
+
+            {existingMatch && (
+              <div className="hero-tip-banner" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8, padding: '10px 12px', fontSize: 12 }}>
+                <span>
+                  Is this the same person? Add <strong>{existingMatch.name}</strong> to {classInfo.name} with
+                  the face data already on file. Otherwise, check the student number.
+                </span>
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <button className="btn-ghost" style={{ padding: '5px 10px', fontSize: 11.5 }} onClick={() => setExistingMatch(null)}>
+                    Not the same
+                  </button>
+                  <button className="btn-primary" style={{ padding: '5px 12px', fontSize: 11.5 }} onClick={addExistingMatch} disabled={reuseBusy !== null}>
+                    Add to this class
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -624,62 +685,6 @@ export default function RegisterPage() {
             </div>
           </PipWindow>
         )}
-
-        {/* Card 3: Enrolled Roster */}
-        <div className="launcher-card">
-          <div className="card-header">
-            <div className="card-header-left">
-              <div className="card-icon-badge sapphire">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                </svg>
-              </div>
-              <span className="card-title-text">Enrolled Roster</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span className="card-count-pill">{students.length}</span>
-              <button className="btn-icon" onClick={loadStudents} title="Refresh Roster">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.93 3.25M3 3v6h6" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* Search bar */}
-          <input
-            className="input"
-            placeholder="Search students..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ padding: '8px 12px', fontSize: 12.5 }}
-          />
-
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, overflowY: 'auto', maxHeight: 260 }}>
-            {filteredStudents.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--muted)', fontSize: 12.5 }}>
-                {students.length === 0 ? 'No students enrolled yet' : 'No matching students'}
-              </div>
-            ) : (
-              filteredStudents.map((s) => (
-                <div key={s.id} className="card-row">
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--ink-heading)' }}>{s.name}</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--muted)', fontFamily: 'monospace' }}>{s.student_no}</div>
-                  </div>
-                  <button
-                    className="btn-ghost"
-                    onClick={() => deleteStudent(s.id, s.name)}
-                    style={{ padding: '4px 10px', fontSize: 11.5, color: 'var(--missing)' }}
-                  >
-                    Delete
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
       </section>
     </>
   )

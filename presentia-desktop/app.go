@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
@@ -290,6 +291,34 @@ func (a *App) SaveCSVToFile(defaultName string, content string) (string, error) 
 		path += ".csv"
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// SaveExcelToFile opens the native save dialog and writes an .xlsx workbook.
+// The frontend downloads the workbook from the sidecar and passes it base64
+// encoded (Wails bindings carry strings, not bytes). Returns the path
+// written, or "" when the user cancels.
+func (a *App) SaveExcelToFile(defaultName string, contentB64 string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(contentB64)
+	if err != nil {
+		return "", fmt.Errorf("invalid workbook data: %w", err)
+	}
+	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
+		Title:           "Export to Excel",
+		DefaultFilename: defaultName,
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "Excel workbook (*.xlsx)", Pattern: "*.xlsx"},
+		},
+	})
+	if err != nil || path == "" {
+		return "", nil
+	}
+	if filepath.Ext(path) == "" {
+		path += ".xlsx"
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", err
 	}
 	return path, nil

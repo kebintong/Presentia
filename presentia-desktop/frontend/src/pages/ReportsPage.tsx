@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { SaveCSVToFile } from '../../wailsjs/go/main/App'
+import { ClassInfo } from '../classes'
 
 const API = 'http://127.0.0.1:7788'
 
@@ -30,7 +31,7 @@ interface EventRow {
 
 const STATUSES = ['Present', 'Late', 'Absent']
 
-export default function ReportsPage() {
+export default function ReportsPage({ classInfo }: { classInfo: ClassInfo }) {
   const [sessions, setSessions]       = useState<Session[]>([])
   const [selectedId, setSelectedId]   = useState<number | null>(null)
   const [rows, setRows]               = useState<AttendanceRow[]>([])
@@ -41,7 +42,7 @@ export default function ReportsPage() {
 
   const loadSessions = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/sessions`)
+      const res = await fetch(`${API}/api/sessions?class_id=${classInfo.id}`)
       if (res.ok) {
         const data: Session[] = await res.json()
         setSessions(data)
@@ -52,7 +53,7 @@ export default function ReportsPage() {
     } catch {
       // Backend starting
     }
-  }, [])
+  }, [classInfo.id])
 
   const loadSession = useCallback(async (id: number) => {
     setLoading(true)

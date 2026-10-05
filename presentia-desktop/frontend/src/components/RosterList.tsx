@@ -1,11 +1,5 @@
 import React from 'react'
-
-interface RosterStudent {
-  id: number
-  name: string
-  state: 'present' | 'missing' | 'waiting'
-  verified?: boolean
-}
+import { VerifyStudent as RosterStudent } from './VerifyDialog'
 
 interface RosterListProps {
   students: RosterStudent[]
@@ -35,6 +29,7 @@ export default function RosterList({ students, onStudentClick, verifyingId }: Ro
         <button
           key={s.id}
           onClick={() => onStudentClick?.(s)}
+          title={`Verify ${s.name}`}
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '9px 12px', borderRadius: 'var(--radius-sm)', width: '100%',
@@ -48,6 +43,13 @@ export default function RosterList({ students, onStudentClick, verifyingId }: Ro
             {s.name}
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            {s.checking ? (
+              <span className="badge badge-emerald" title="Liveness check running">CHECKING</span>
+            ) : s.suspect && (
+              <span className="badge badge-warn" title="Their video has barely changed — it may be a photo or a frozen feed. Click to check.">
+                CHECK?
+              </span>
+            )}
             {s.verified && (
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--present)" strokeWidth="3">
                 <path d="M20 6L9 17l-5-5" />

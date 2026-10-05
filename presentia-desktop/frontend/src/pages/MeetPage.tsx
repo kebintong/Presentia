@@ -9,18 +9,15 @@ import {
 } from '../../wailsjs/go/main/App'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { useFrameFeed, type Frame } from '../components/frameFeed'
+import { ClassInfo } from '../classes'
+import VerifyDialog, { CheckState, VerifyStudent, newCheck } from '../components/VerifyDialog'
 
 const API = 'http://127.0.0.1:7788'
 // Bindings added after the generated wailsjs files; called defensively.
 const goApp = () => (window as any)['go']?.['main']?.['App']
 const WS  = 'ws://127.0.0.1:7788'
 
-interface RosterStudent {
-  id: number
-  name: string
-  state: 'present' | 'missing' | 'waiting'
-  verified?: boolean
-}
+type RosterStudent = VerifyStudent
 
 interface AlertItem {
   id: number
@@ -69,7 +66,7 @@ interface ScreenShot {
   top: number
 }
 
-export default function MeetPage() {
+export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
   const [sessionName, setSessionName]   = useState('')
   const [missingAfter, setMissingAfter] = useState(5)
   const [monitoring, setMonitoring]     = useState(false)
@@ -89,6 +86,8 @@ export default function MeetPage() {
   const [enrollDialog, setEnrollDialog] = useState<EnrollDialog | null>(null)
   const [verifyingId, setVerifyingId]   = useState<number | null>(null)
   const [verifyPrompt, setVerifyPrompt] = useState('')
+  // Verify dialog for one student (liveness check / quick re-check).
+  const [check, setCheck]               = useState<CheckState | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
   // Native bubble state
@@ -241,7 +240,11 @@ export default function MeetPage() {
     wsRef.current = ws
     ws.onopen = () => {
       const name = sessionName.trim() || `Meet ${new Date().toLocaleString()}`
-      ws.send(JSON.stringify({ action: 'start', region, name, missing_after: missingAfter }))
+      // class_id: only this class's roster is matched and the session is
+      // filed under it.
+      ws.send(JSON.stringify({
+        action: 'start', region, name, missing_after: missingAfter, class_id: classInfo.id,
+      }))
     }
     ws.onmessage = (ev) => {
       if (typeof ev.data !== 'string') {
@@ -273,17 +276,32 @@ export default function MeetPage() {
         setVerifyingId(null)
         setVerifyPrompt('')
         addAlert(data.message, data.ok ? 'ok' : 'error')
+      } else if (data.type === 'challenge_started') {
+        setCheck((c) => c && c.student.id === data.student_id
+          ? { ...c, phase: 'running', instructions: data.instructions, chatText: data.chat_text,
+              prompt: '', step: 1, steps: data.instructions.length + 1, result: null, error: '' }
+          : c)
+      } else if (data.type === 'challenge') {
+        setCheck((c) => c && c.student.id === data.student_id && c.phase === 'running'
+          ? { ...c, prompt: data.prompt, step: data.step, steps: data.steps,
+              faceFound: data.face_found, smallFace: data.small_face,
+              secondsLeft: data.seconds_left, result: data.result,
+              phase: data.result ? 'done' : 'running' }
+          : c)
       } else if (data.type === 'stopped') {
+        setCheck(null)
         setMonitoring(false); setSessionId(null); setFrame(null)
         addAlert('Monitoring stopped. Attendance recorded.', 'info')
         ws.close()
       } else if (data.type === 'error') {
         addAlert(`Error: ${data.message}`, 'error')
+        // A check that could not start goes back to the choice screen.
+        setCheck((c) => c && c.phase === 'starting' ? { ...c, phase: 'choose', error: data.message } : c)
       }
     }
     ws.onclose = () => { setMonitoring(false); setFrame(null) }
     ws.onerror = () => addAlert('WebSocket connection error', 'error')
-  }, [region, sessionName, missingAfter])
+  }, [region, sessionName, missingAfter, classInfo.id])
 
   const sendWs = (payload: Record<string, unknown>) => {
     const ws = wsRef.current
@@ -334,14 +352,44 @@ export default function MeetPage() {
     if (!monitoring) {
       addAlert('Start monitoring before verifying a student.', 'warn'); return
     }
-    if (student.state !== 'present') {
-      addAlert(`${student.name} must be visible to verify.`, 'warn'); return
+    setCheck(newCheck(student))
+  }
+
+  // Keep the dialog's copy of the student current (state, suspect flag).
+  useEffect(() => {
+    setCheck((c) => {
+      if (!c) return c
+      const now = roster.find((r) => r.id === c.student.id)
+      return now && (now.state !== c.student.state || now.suspect !== c.student.suspect)
+        ? { ...c, student: now } : c
+    })
+  }, [roster])
+
+  const startCheck = () => {
+    if (!check) return
+    if (!sendWs({ action: 'challenge', student_id: check.student.id })) {
+      setCheck({ ...check, phase: 'choose', error: 'Not connected to the monitor.' }); return
     }
+    setCheck({ ...newCheck(check.student), phase: 'starting' })
+  }
+
+  const quickCheck = () => {
+    if (!check) return
+    const student = check.student
+    setCheck(null)
     if (!sendWs({ action: 'verify', student_id: student.id, timeout: 8.0 })) {
       addAlert('Not connected to the monitor.', 'error'); return
     }
     setVerifyingId(student.id)
-    setVerifyPrompt(`Verifying ${student.name}…`)
+    setVerifyPrompt(`Re-checking ${student.name}'s face…`)
+  }
+
+  const closeCheck = () => {
+    if (check && (check.phase === 'running' || check.phase === 'starting')) {
+      sendWs({ action: 'challenge_cancel' })
+      addAlert(`Liveness check for ${check.student.name} cancelled.`, 'info')
+    }
+    setCheck(null)
   }
 
   return (
@@ -414,7 +462,8 @@ export default function MeetPage() {
           <span>
             Pick what to watch with <strong>Screen Area</strong> or <strong>Select Window</strong>, then
             press <strong>Launch Monitor</strong>. <strong>Open Bubble</strong> puts the same controls in a
-            floating circle that stays above Google Meet while you teach.
+            floating circle that stays above Google Meet while you teach. Click a student in the roster
+            to run a liveness check if their video looks suspicious.
           </span>
         </div>
       </section>
@@ -606,6 +655,10 @@ export default function MeetPage() {
             </div>
           )}
         </div>
+      )}
+
+      {check && (
+        <VerifyDialog check={check} onStart={startCheck} onQuickCheck={quickCheck} onClose={closeCheck} />
       )}
 
       {/* ── Enroll Unknown Face Modal ─────────────────────────────────── */}

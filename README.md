@@ -193,6 +193,17 @@ presentia-desktop/build/bin/
 
 ---
 
+## Online Registration Website
+
+Students can register themselves for a class from their own phone or laptop with the class **join code**:
+they enter their details, pass a short live face check in the browser, and the instructor accepts them in
+the app (Students page → **Online registration**). The website lives in [`web/`](web/) and runs on
+Cloudflare's free plan; face templates are only ever built on the instructor's computer, and photos are
+deleted from the website once collected (or after 14 days). Setup takes about ten minutes — see
+[`web/README.md`](web/README.md).
+
+---
+
 ## Project Structure
 
 ```

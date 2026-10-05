@@ -78,6 +78,10 @@ export function SaveCSVToFile(arg1, arg2) {
   return window['go']['main']['App']['SaveCSVToFile'](arg1, arg2);
 }
 
+export function SaveExcelToFile(arg1, arg2) {
+  return window['go']['main']['App']['SaveExcelToFile'](arg1, arg2);
+}
+
 export function SetAlwaysOnTop(arg1, arg2) {
   return window['go']['main']['App']['SetAlwaysOnTop'](arg1, arg2);
 }

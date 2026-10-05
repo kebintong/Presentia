@@ -147,11 +147,15 @@ class LivenessChecker:
     }
 
     def __init__(self, tracker: FaceMeshTracker, directional: bool = True,
-                 randomized: bool = True, spoof=None) -> None:
+                 randomized: bool = True, spoof=None,
+                 step_time: float | None = None) -> None:
         self._tracker = tracker
         self._directional = directional
         self._randomized = randomized
         self._spoof = spoof
+        # Remote video (a Meet tile) needs longer per step: the instruction
+        # is relayed by the host and the picture arrives with network delay.
+        self._step_time = step_time if step_time is not None else self.STEP_TIME
         # LEFT/RIGHT assume the mirrored selfie preview; see _yaw().
         self.mirrored = True
         self.reset()
@@ -192,6 +196,11 @@ class LivenessChecker:
     @property
     def failed(self) -> bool:
         return self.stage == self.STAGE_FAILED
+
+    def action_prompts(self) -> list[str]:
+        """Every action of this challenge in order, without the opening
+        "look straight" step — what the host sends to the student."""
+        return [self._PROMPTS[s] for s in self.steps if s != "center"]
 
     def prompt(self) -> str:
         if self.stage == self.STAGE_PASSED:
@@ -262,7 +271,7 @@ class LivenessChecker:
         now = time.monotonic()
         if self._step_started is None:
             self._step_started = now
-        limit = self.STEP_TIME if self._randomized else self.FIXED_TIME
+        limit = self._step_time if self._randomized else self.FIXED_TIME
         if self.stage != "center" and now - self._step_started > limit:
             self._fail(f"Too slow: \"{self._PROMPTS[self.stage]}\" was not done in time.")
             return self._state(True)

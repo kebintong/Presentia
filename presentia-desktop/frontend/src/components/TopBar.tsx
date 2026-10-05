@@ -2,8 +2,9 @@ import React from 'react'
 import PresentiaLogo from './PresentiaLogo'
 import markLight from '../assets/images/presentia-mark-light.png'
 import markDark from '../assets/images/presentia-mark-dark.png'
+import { ClassInfo, classLabel } from '../classes'
 
-type Page = 'register' | 'meet' | 'session' | 'reports'
+type Page = 'register' | 'students' | 'meet' | 'session' | 'reports'
 
 interface TopBarProps {
   activePage: Page
@@ -18,6 +19,10 @@ interface TopBarProps {
   version?: string
   /** Experimental iridescent design: spectrum mark, theme locked to dark. */
   iridescent?: boolean
+  /** The open class; null on the start screen. */
+  activeClass?: ClassInfo | null
+  /** Back to the start screen to pick another class. */
+  onSwitchClass?: () => void
 }
 
 /** Brand mark size in the top bar. MARK_WIDEN stretches it horizontally
@@ -34,6 +39,8 @@ export default function TopBar({
   onToggleTheme,
   version,
   iridescent = false,
+  activeClass = null,
+  onSwitchClass,
 }: TopBarProps) {
   // Window control actions (Wails Go binding + Runtime fallback)
   const handleMinimise = () => {
@@ -83,11 +90,30 @@ export default function TopBar({
         {/* App Title */}
         <span className="top-app-title">Presentia</span>
         {version && <span className="top-version-tag" title={`Version ${version}`}>v{version}</span>}
+        {activeClass && (
+          <button
+            className="top-class-chip"
+            onClick={onSwitchClass}
+            onDoubleClick={(e) => e.stopPropagation()}
+            title={`${classLabel(activeClass)} — click to switch class`}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M22 10 12 5 2 10l10 5 10-5z" />
+              <path d="M6 12v5c3 3 9 3 12 0v-5" />
+            </svg>
+            <span>{classLabel(activeClass)}</span>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
+        )}
         <span className="top-page-tag">
-          {activePage === 'register' && 'Student Registration'}
-          {activePage === 'meet' && 'Meeting Monitor'}
-          {activePage === 'session' && 'Class Session'}
-          {activePage === 'reports' && 'Attendance Reports'}
+          {!activeClass && 'Your Classes'}
+          {activeClass && activePage === 'register' && 'Student Registration'}
+          {activeClass && activePage === 'students' && 'Students'}
+          {activeClass && activePage === 'meet' && 'Meeting Monitor'}
+          {activeClass && activePage === 'session' && 'Class Session'}
+          {activeClass && activePage === 'reports' && 'Attendance Reports'}
         </span>
       </div>
 
