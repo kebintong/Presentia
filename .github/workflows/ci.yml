@@ -6,6 +6,9 @@ name: CI
 
 on:
   push:
+    # Dependabot branches are checked through their pull request instead,
+    # so they don't run twice.
+    branches-ignore: ["dependabot/**"]
     paths-ignore: ["**.md", "Dev Ins.txt"]
   pull_request:
     paths-ignore: ["**.md", "Dev Ins.txt"]
