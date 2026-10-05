@@ -34,6 +34,10 @@ foreach ($f in @($updateGo, $issFile, $wailsJson)) {
 $goPattern  = 'const\s+AppVersion\s*=\s*"([^"]*)"'
 $issPattern = '#define\s+MyAppVersion\s+"([^"]*)"'
 
+# Files are READ as UTF-8 too (-Encoding UTF8 below). Without it Windows
+# PowerShell 5.1 reads them as ANSI, and every run re-encoded the em dashes
+# in the comments into longer and longer garbage.
+#
 # Write UTF-8 with NO byte-order mark.
 #
 # Windows PowerShell 5.1 always prepends a BOM when asked for UTF8 output, and
@@ -48,9 +52,9 @@ function Write-Utf8NoBom {
 }
 
 function Get-Current {
-    $go  = [regex]::Match((Get-Content $updateGo  -Raw), $goPattern).Groups[1].Value
-    $iss = [regex]::Match((Get-Content $issFile   -Raw), $issPattern).Groups[1].Value
-    $wj  = (Get-Content $wailsJson -Raw | ConvertFrom-Json)
+    $go  = [regex]::Match((Get-Content $updateGo  -Raw -Encoding UTF8), $goPattern).Groups[1].Value
+    $iss = [regex]::Match((Get-Content $issFile   -Raw -Encoding UTF8), $issPattern).Groups[1].Value
+    $wj  = (Get-Content $wailsJson -Raw -Encoding UTF8 | ConvertFrom-Json)
     $pv  = if ($wj.info) { $wj.info.productVersion } else { '' }
     [PSCustomObject]@{ UpdateGo = $go; Installer = $iss; WailsJson = $pv }
 }
@@ -78,19 +82,19 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 }
 
 # update.go
-$src = Get-Content $updateGo -Raw
+$src = Get-Content $updateGo -Raw -Encoding UTF8
 if ($src -notmatch $goPattern) { throw "Could not find 'const AppVersion' in update.go" }
 $src = [regex]::Replace($src, $goPattern, "const AppVersion = `"$Version`"")
 Write-Utf8NoBom -Path $updateGo -Text $src
 
 # installer.iss
-$src = Get-Content $issFile -Raw
+$src = Get-Content $issFile -Raw -Encoding UTF8
 if ($src -notmatch $issPattern) { throw "Could not find '#define MyAppVersion' in installer.iss" }
 $src = [regex]::Replace($src, $issPattern, "#define MyAppVersion `"$Version`"")
 Write-Utf8NoBom -Path $issFile -Text $src
 
 # wails.json - stamps the version into the exe's file properties
-$wj = Get-Content $wailsJson -Raw | ConvertFrom-Json
+$wj = Get-Content $wailsJson -Raw -Encoding UTF8 | ConvertFrom-Json
 if (-not $wj.info) {
     $wj | Add-Member -MemberType NoteProperty -Name info -Value ([PSCustomObject]@{})
 }

@@ -1,4 +1,4 @@
-; installer.iss ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Inno Setup script for Presentia
+; installer.iss — Inno Setup script for Presentia
 ;
 ; Prereqs before compiling this (see BUILD.md for the full pipeline):
 ;   1. cd presentia-desktop/frontend && npm install && cd ../..
@@ -14,11 +14,11 @@
 ; Output: build\output\PresentiaSetup.exe
 
 #define MyAppName "Presentia"
-; Do not edit MyAppVersion by hand ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it must match AppVersion in
+; Do not edit MyAppVersion by hand — it must match AppVersion in
 ; presentia-desktop\update.go and the git tag of the GitHub Release, or the
 ; in-app update banner will never clear. Use:
 ;     powershell -ExecutionPolicy Bypass -File build\set-version.ps1 1.1.0
-#define MyAppVersion "1.5.0"
+#define MyAppVersion "1.5.1"
 #define MyAppPublisher "Presentia Team"
 #define MyAppExeName "Presentia.exe"
 
@@ -48,7 +48,7 @@ WizardStyle=modern
 SetupIconFile=..\presentia-desktop\build\windows\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ; Presentia does its OWN first-launch wizard inside the app (system check,
-; model download, camera test) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â this installer wizard should stay minimal.
+; model download, camera test) — this installer wizard should stay minimal.
 DisableWelcomePage=no
 ArchitecturesInstallIn64BitMode=x64compatible
 
@@ -59,14 +59,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; Wails-built desktop app
 Source: "..\presentia-desktop\build\bin\Presentia.exe"; DestDir: "{app}"; Flags: ignoreversion
 
-; Frozen Python sidecar (onedir ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â exe + its _internal libs), goes in a
+; Frozen Python sidecar (onedir — exe + its _internal libs), goes in a
 ; "sidecar" subfolder. app.go looks for exactly this path:
 ;   <exeDir>\sidecar\presentia-sidecar.exe
 Source: "..\dist\presentia-sidecar\*"; DestDir: "{app}\sidecar"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; MediaPipe landmark model is already bundled INSIDE the sidecar build via
 ; the .spec file's datas=[...], so it does not need a separate line here.
-; InsightFace's buffalo_l pack is intentionally NOT included ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it downloads
+; InsightFace's buffalo_l pack is intentionally NOT included — it downloads
 ; on first launch as part of the in-app wizard (see BUILD.md).
 
 [Icons]
@@ -84,7 +84,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName} now"; Flags
 ; Clean up the sidecar's writable state if it ever leaves anything in {app}.
 Type: filesandordirs; Name: "{app}\sidecar"
 
-; NOTE: this does NOT delete the user's data dir (%APPDATA%\Presentia ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
+; NOTE: this does NOT delete the user's data dir (%APPDATA%\Presentia —
 ; attendance.db, InsightFace model cache) on uninstall, which matches most
 ; users' expectation that their data survives a reinstall/upgrade. Add an
 ; [UninstallDelete] entry for {userappdata}\Presentia only if you want a
