@@ -130,6 +130,21 @@ gate on a flag like `localStorage.getItem('setupComplete')`.
 
 ## Every-release checklist
 
+First make sure the commit you are releasing has a **green check** on GitHub
+(the CI workflow in `.github/workflows/ci.yml` runs the Python tests, the
+frontend build, a Windows build of the desktop app and a website dry run on
+every push). A red X means something is broken: open the **Actions** tab to
+see which step failed, and fix it before building the installer.
+
+To run the Python tests on your own computer:
+
+```powershell
+.venv\Scripts\python -m pip install pytest httpx openpyxl
+.venv\Scripts\python -m pytest tests -q
+```
+
+Then build:
+
 ```bash
 pyinstaller build\presentia-sidecar.spec --noconfirm --clean
 cd presentia-desktop && wails build && cd ..

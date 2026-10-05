@@ -68,7 +68,9 @@ export default function TopBar({
   }
 
   return (
-    <header className="top-bar" onDoubleClick={handleToggleMaximise}>
+    // No double-click-to-maximise here: it also fired when buttons on the bar
+    // were double-clicked. Maximise with the window button instead.
+    <header className="top-bar">
       {/* Left side: "P" Brand Logo + Title */}
       <div className="top-bar-left">
         {/* Presentia mark — cyan in light mode, white in dark, spectrum when iridescent */}
@@ -94,7 +96,6 @@ export default function TopBar({
           <button
             className="top-class-chip"
             onClick={onSwitchClass}
-            onDoubleClick={(e) => e.stopPropagation()}
             title={`${classLabel(activeClass)} — click to switch class`}
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

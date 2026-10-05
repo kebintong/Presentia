@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useLayoutEffect } from 'react'
 import TopBar from './components/TopBar'
+import { switchTheme } from './themeTransition'
 import Sidebar from './components/Sidebar'
 import SettingsPanel, { UpdateInfo } from './components/SettingsPanel'
 import RegisterPage from './pages/RegisterPage'
@@ -57,8 +58,9 @@ export default function App() {
   )
   const effectiveTheme: Theme = iridescent ? 'dark' : theme
 
-  // Sync theme with DOM and localStorage
-  useEffect(() => {
+  // Sync theme with DOM and localStorage. A layout effect, so the attribute
+  // is set during the commit (the animated theme switch snapshots right after).
+  useLayoutEffect(() => {
     document.documentElement.setAttribute('data-theme', effectiveTheme)
     localStorage.setItem('presentia-theme', theme)
     // The floating bubble is a native Win32 window, so it cannot read the
@@ -68,10 +70,10 @@ export default function App() {
 
   const toggleTheme = () => {
     if (iridescent) return // locked to dark
-    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
+    switchTheme(() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark')))
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = document.documentElement
     if (iridescent) root.setAttribute('data-style', 'iridescent')
     else root.removeAttribute('data-style')
@@ -79,6 +81,28 @@ export default function App() {
     // Swaps the native bubble between the cyan mark and the spectrum mark.
     goApp()?.['SetBubbleStyle']?.(iridescent)
   }, [iridescent])
+
+  // Interface motion (page, card and dialog animations). Until the user
+  // chooses, follow the system's "reduce motion" preference.
+  const [animations, setAnimations] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('presentia-animations')
+      if (saved === 'on') return true
+      if (saved === 'off') return false
+    } catch { /* storage unavailable */ }
+    return !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  })
+
+  useLayoutEffect(() => {
+    document.documentElement.setAttribute('data-motion', animations ? 'on' : 'off')
+  }, [animations])
+
+  const toggleAnimations = () => {
+    setAnimations((v) => {
+      try { localStorage.setItem('presentia-animations', v ? 'off' : 'on') } catch { /* ignore */ }
+      return !v
+    })
+  }
 
   // Poll engine status until ready
   useEffect(() => {
@@ -200,7 +224,9 @@ export default function App() {
         theme={effectiveTheme}
         onToggleTheme={toggleTheme}
         iridescent={iridescent}
-        onToggleIridescent={() => setIridescent((v) => !v)}
+        onToggleIridescent={() => switchTheme(() => setIridescent((v) => !v))}
+        animations={animations}
+        onToggleAnimations={toggleAnimations}
         onRecheck={recheckUpdate}
       />
     </>

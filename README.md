@@ -1,5 +1,6 @@
 # Presentia — AI-Powered Virtual Classroom Attendance System
 
+[![CI](https://github.com/kebintong/Presentia/actions/workflows/ci.yml/badge.svg)](https://github.com/kebintong/Presentia/actions/workflows/ci.yml)
 [![Wails](https://img.shields.io/badge/Desktop-Wails_v2-df0000?logo=go&logoColor=white)](https://wails.io/)
 [![React](https://img.shields.io/badge/Frontend-React_19_+_TypeScript-61dafb?logo=react&logoColor=black)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Styles-Tailwind_CSS_v4-38bdf8?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)

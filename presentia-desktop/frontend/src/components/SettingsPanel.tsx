@@ -41,6 +41,8 @@ interface SettingsPanelProps {
   onToggleTheme: () => void
   iridescent: boolean
   onToggleIridescent: () => void
+  animations: boolean
+  onToggleAnimations: () => void
   onRecheck: () => Promise<UpdateInfo | null>
 }
 
@@ -48,7 +50,7 @@ const goApp = () => (window as any)['go']?.['main']?.['App']
 
 export default function SettingsPanel({
   open, onClose, update, version, theme, onToggleTheme,
-  iridescent, onToggleIridescent, onRecheck,
+  iridescent, onToggleIridescent, animations, onToggleAnimations, onRecheck,
 }: SettingsPanelProps) {
   const [phase, setPhase]         = useState<Phase>('idle')
   const [progress, setProgress]   = useState(0)
@@ -164,6 +166,24 @@ export default function SettingsPanel({
             </div>
             <button className="btn-ghost" onClick={onToggleTheme} disabled={iridescent}>
               Switch to {theme === 'dark' ? 'Light' : 'Dark'}
+            </button>
+          </div>
+          <div className="settings-row">
+            <div>
+              <div className="settings-row-title">Animations</div>
+              <div className="settings-row-sub">
+                Smooth motion for pages, cards and dialogs. Turn off to keep everything still.
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={animations}
+              aria-label="Animations"
+              className={`toggle-switch ${animations ? 'on' : ''}`}
+              onClick={onToggleAnimations}
+            >
+              <span className="toggle-knob" />
             </button>
           </div>
         </div>

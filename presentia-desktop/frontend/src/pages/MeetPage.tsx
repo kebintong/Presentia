@@ -663,8 +663,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
 
       {/* ── Enroll Unknown Face Modal ─────────────────────────────────── */}
       {enrollDialog && (
-        <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center',
-          justifyContent: 'center', background: 'var(--overlay-bg)', zIndex: 200 }}>
+        <div className="modal-scrim">
           <div className="launcher-card" style={{ width: 340, maxWidth: 'calc(100vw - 32px)', padding: 24, gap: 16 }}>
             <h3 style={{ fontSize: 16, color: 'var(--ink-heading)' }}>Enroll Face from Meeting</h3>
             <img src={`data:image/jpeg;base64,${enrollDialog.unknown.crop_jpeg}`} alt="Face"

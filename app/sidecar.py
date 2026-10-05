@@ -11,6 +11,7 @@ import asyncio
 import base64
 import csv
 import io
+import os
 import sys
 import threading
 import time
@@ -58,7 +59,10 @@ def _preload_engine() -> None:
 
 
 perf.apply_process_priority()
-threading.Thread(target=_preload_engine, daemon=True).start()
+# Tests (and CI) import this module without the face models; they set
+# PRESENTIA_SKIP_ENGINE=1 so nothing is downloaded or loaded.
+if os.environ.get("PRESENTIA_SKIP_ENGINE") != "1":
+    threading.Thread(target=_preload_engine, daemon=True).start()
 
 
 # ── Lifetime: never outlive the desktop app ───────────────────────────────────
