@@ -3,6 +3,7 @@ import TopBar from './components/TopBar'
 import { switchTheme } from './themeTransition'
 import Sidebar from './components/Sidebar'
 import SettingsPanel, { UpdateInfo } from './components/SettingsPanel'
+import ProblemPrompt from './components/ProblemPrompt'
 import RegisterPage from './pages/RegisterPage'
 import MeetPage from './pages/MeetPage'
 import SessionPage from './pages/SessionPage'
@@ -229,6 +230,9 @@ export default function App() {
         onToggleAnimations={toggleAnimations}
         onRecheck={recheckUpdate}
       />
+
+      {/* Diagnostic mode: offers a report when something fails. */}
+      <ProblemPrompt version={version} />
     </>
   )
 }

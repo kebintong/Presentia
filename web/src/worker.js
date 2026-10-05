@@ -21,8 +21,10 @@
  * RETENTION_DAYS.
  */
 
-const VERSION = '1.0.0'
+const VERSION = '1.1.0'
 const RETENTION_DAYS = 14
+const REPORT_DAYS = 30             // diagnostic reports are kept this long
+const REPORT_MAX = 200_000          // characters per diagnostic report
 
 const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/
 const STUDENT_NO_RE = /^[A-Za-z0-9][A-Za-z0-9 ._\-\/]{0,31}$/
@@ -37,6 +39,7 @@ const LIMITS = {
   lookup: [300, 600],     // join-code lookups (guessing one of ~887 million codes stays hopeless)
   register: [120, 3600],  // registrations submitted
   host: [30, 3600],       // new host credentials (one per install; a staff training can share an IP)
+  report: [20, 3600],     // diagnostic reports from the desktop app
 }
 
 // ── small helpers ────────────────────────────────────────────────────────
@@ -324,9 +327,102 @@ async function deleteRegistration(env, host, id) {
   return json({ ok: true, existed: true })
 }
 
+// ── diagnostic reports (desktop app → Settings → Diagnostics) ───────────
+//
+// Stored in D1 for REPORT_DAYS days. Read them in the Cloudflare dashboard:
+//   SELECT id, created_at, app_version, summary FROM reports ORDER BY created_at DESC;
+// Optionally also opened as a GitHub issue: set the secrets GITHUB_TOKEN
+// (fine-grained token, Issues: read and write, on one repo only) and
+// REPORTS_REPO ("owner/repo"). The repo MUST be private — reports can contain
+// student names — so the Worker checks that and skips public repos.
+
+let reportsTableReady = false
+
+async function ensureReportsTable(env) {
+  if (reportsTableReady) return
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS reports (
+       id          TEXT PRIMARY KEY,
+       host_id     TEXT,
+       created_at  TEXT NOT NULL,
+       app_version TEXT NOT NULL DEFAULT '',
+       summary     TEXT NOT NULL DEFAULT '',
+       body        TEXT NOT NULL,
+       issue_url   TEXT
+     )`
+  ).run()
+  reportsTableReady = true
+}
+
+function oneLine(raw, max) {
+  return cleanName(raw).slice(0, max)
+}
+
+async function submitReport(env, request, host, ctx) {
+  const { body, error } = await readJson(request, REPORT_MAX * 4 + 10_000)
+  if (error) return error
+  if (!(await allow(env, request, 'report'))) {
+    return fail(429, 'rate_limited', 'Too many reports from this network. Try again in an hour.')
+  }
+  const text = String(body.text || '').slice(-REPORT_MAX)
+  if (!text.trim()) return fail(400, 'empty', 'The report is empty.')
+  const summary = oneLine(body.summary, 200)
+  const version = oneLine(body.app_version, 40)
+  await ensureReportsTable(env)
+  let id = ''
+  for (let i = 0; i < 3 && !id; i++) {
+    const candidate = 'R-' + randomHex(4).toUpperCase()
+    const res = await env.DB.prepare(
+      `INSERT OR IGNORE INTO reports (id, host_id, created_at, app_version, summary, body)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`
+    ).bind(candidate, host.id, nowIso(), version, summary, text).run()
+    if (res.meta && res.meta.changes) id = candidate
+  }
+  if (!id) return fail(500, 'server_error', 'Could not store the report. Try again.')
+  const github = !!(env.GITHUB_TOKEN && env.REPORTS_REPO)
+  if (github) ctx.waitUntil(openIssue(env, { id, summary, version, text }).catch((e) => console.error(e)))
+  return json({ id, github }, 201)
+}
+
+async function openIssue(env, report) {
+  const repo = String(env.REPORTS_REPO).trim()
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return console.error('REPORTS_REPO must look like owner/repo')
+  const headers = {
+    Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'presentia-reports',
+  }
+  const info = await fetch(`https://api.github.com/repos/${repo}`, { headers })
+  if (!info.ok) return console.error(`GitHub: cannot read ${repo} (${info.status})`)
+  if (!(await info.json()).private) {
+    return console.error(`GitHub: ${repo} is public; diagnostic reports are only filed in private repos`)
+  }
+  const fence = '`'.repeat(4)
+  const issue = await fetch(`https://api.github.com/repos/${repo}/issues`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: `[${report.id}] ${report.summary || 'Diagnostic report'}`.slice(0, 200),
+      body: [
+        `Diagnostic report **${report.id}** from Presentia ${report.version || '(unknown version)'}.`,
+        '',
+        report.summary,
+        '',
+        fence + 'text',
+        report.text.slice(-60_000),
+        fence,
+      ].join('\n'),
+    }),
+  })
+  if (!issue.ok) return console.error(`GitHub: issue not created (${issue.status}) ${await issue.text()}`)
+  const { html_url } = await issue.json()
+  await env.DB.prepare('UPDATE reports SET issue_url = ?1 WHERE id = ?2').bind(html_url, report.id).run()
+}
+
 // ── router ───────────────────────────────────────────────────────────────
 
-async function handleApi(request, env, url) {
+async function handleApi(request, env, url, ctx) {
   const { pathname } = url
   const method = request.method
   let m
@@ -353,16 +449,17 @@ async function handleApi(request, env, url) {
     if ((m = pathname.match(/^\/api\/host\/registrations\/([^/]+)$/)) && method === 'DELETE') {
       return deleteRegistration(env, host, m[1])
     }
+    if (pathname === '/api/host/reports' && method === 'POST') return submitReport(env, request, host, ctx)
   }
   return fail(404, 'not_found', 'Unknown endpoint.')
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url)
     if (url.pathname.startsWith('/api/')) {
       try {
-        return await handleApi(request, env, url)
+        return await handleApi(request, env, url, ctx)
       } catch (err) {
         console.error(err)
         return fail(500, 'server_error', 'Something went wrong. Please try again.')
@@ -371,7 +468,7 @@ export default {
     return env.ASSETS.fetch(request)
   },
 
-  /** Daily: delete registrations nobody collected, and stale rate-limit rows. */
+  /** Daily: delete registrations nobody collected, stale rate-limit rows and old reports. */
   async scheduled(_event, env) {
     const cutoff = new Date(Date.now() - RETENTION_DAYS * 86_400_000).toISOString()
     await env.DB.batch([
@@ -382,5 +479,8 @@ export default {
       env.DB.prepare('DELETE FROM rate_limits WHERE window_start < ?1')
         .bind(Math.floor(Date.now() / 1000) - 86_400),
     ])
+    await ensureReportsTable(env)
+    await env.DB.prepare('DELETE FROM reports WHERE created_at < ?1')
+      .bind(new Date(Date.now() - REPORT_DAYS * 86_400_000).toISOString()).run()
   },
 }

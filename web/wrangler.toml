@@ -3,6 +3,8 @@
 name = "presentia"
 main = "src/worker.js"
 compatibility_date = "2026-09-01"
+# Keep variables set in the Cloudflare dashboard when deploying from GitHub.
+keep_vars = true
 
 # The website. Static files are served directly; only /api/* runs the Worker.
 [assets]

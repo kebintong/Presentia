@@ -2567,3 +2567,62 @@ select.input option {
   border-radius: var(--radius-md); background: var(--card-row-bg);
   font-size: 10.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere;
 }
+
+/* ── Diagnostic mode ────────────────────────────────────────────────── */
+.diag-logbox {
+  border-radius: var(--radius-md);
+  background: var(--card-row-bg);
+  border: 1px solid var(--card-row-border);
+  overflow: hidden;
+}
+.diag-logtext {
+  margin: 0; max-height: 200px; overflow: auto; padding: 10px 12px;
+  font-size: 10.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink);
+}
+.diag-logbar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
+  padding: 8px 10px; border-top: 1px solid var(--card-row-border);
+}
+.diag-logbar .diag-ms { overflow-wrap: anywhere; min-width: 0; flex: 1 1 160px; }
+.diag-logbar .btn-ghost, .diag-actions .btn-ghost, .diag-actions .btn-primary { padding: 6px 12px; font-size: 12px; }
+.diag-actions { flex-wrap: wrap; }
+.danger-text:not(:disabled) { color: var(--danger); }
+.diag-confirm p { margin: 0; font-size: 13px; color: var(--ink); }
+.diag-confirm ul { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.diag-confirm li { font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.diag-confirm li strong { color: var(--ink-heading); }
+.report-preview {
+  margin: 0; max-height: 300px; overflow: auto; padding: 10px 12px;
+  border-radius: var(--radius-md); background: var(--card-row-bg); border: 1px solid var(--card-row-border);
+  font-size: 10.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink);
+}
+
+/* The error box in the corner (diagnostic mode). Never blocks the page. */
+.problem-prompt {
+  position: fixed; right: 16px; bottom: 16px; z-index: 290;
+  width: min(380px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius-lg, 14px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  animation: rise var(--dur) var(--ease-out) backwards;
+}
+.problem-head { display: flex; gap: 10px; align-items: flex-start; }
+.problem-icon {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font-weight: 800; font-size: 13px;
+  background: var(--missing-dim); color: var(--danger);
+}
+.problem-text { flex: 1; min-width: 0; }
+.problem-title { font-size: 13px; font-weight: 700; color: var(--ink-heading); }
+.problem-message { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.problem-close { flex: none; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 4px; }
+.problem-close:hover { color: var(--ink); }
+.problem-note { font-size: 11.5px; color: var(--muted); }
+.problem-actions { display: flex; gap: 6px; align-items: center; }
+.problem-actions .btn-ghost, .problem-actions .btn-primary { padding: 6px 10px; font-size: 12px; }
+.problem-count { flex: 1; font-size: 11px; color: var(--muted-lo); }

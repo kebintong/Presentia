@@ -55,3 +55,15 @@ CREATE TABLE IF NOT EXISTS rate_limits (
     count        INTEGER NOT NULL,
     window_start INTEGER NOT NULL
 );
+
+-- Diagnostic reports sent from the desktop app (Settings → Diagnostics).
+-- Kept 30 days. The Worker also creates this table itself if it is missing.
+CREATE TABLE IF NOT EXISTS reports (
+    id          TEXT PRIMARY KEY,
+    host_id     TEXT,
+    created_at  TEXT NOT NULL,
+    app_version TEXT NOT NULL DEFAULT '',
+    summary     TEXT NOT NULL DEFAULT '',
+    body        TEXT NOT NULL,
+    issue_url   TEXT
+);

@@ -324,6 +324,29 @@ func (a *App) SaveExcelToFile(defaultName string, contentB64 string) (string, er
 	return path, nil
 }
 
+// SaveTextToFile opens the native save dialog and writes plain text (a
+// diagnostic report or the activity log). Returns the path written, or ""
+// when the user cancels.
+func (a *App) SaveTextToFile(defaultName string, content string) (string, error) {
+	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
+		Title:           "Save diagnostic report",
+		DefaultFilename: defaultName,
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "Text file (*.txt)", Pattern: "*.txt"},
+		},
+	})
+	if err != nil || path == "" {
+		return "", nil
+	}
+	if filepath.Ext(path) == "" {
+		path += ".txt"
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 // SidecarURL returns the base URL of the Python sidecar for the frontend.
 func (a *App) SidecarURL() string {
 	return sidecarURL

@@ -134,7 +134,7 @@ def _is_cert_error(exc: BaseException) -> bool:
     return isinstance(reason, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(reason)
 
 
-def _urlopen(req: urllib.request.Request):
+def _urlopen(req: urllib.request.Request, timeout: float = TIMEOUT):
     """urlopen, trying the next certificate check only when the previous one
     rejected the site's certificate (nothing has been sent at that point, so
     retrying is safe even for POST)."""
@@ -144,14 +144,14 @@ def _urlopen(req: urllib.request.Request):
         names.remove(_working)
         names.insert(0, _working)
     if not req.full_url.startswith("https://"):
-        return urllib.request.urlopen(req, timeout=TIMEOUT)
+        return urllib.request.urlopen(req, timeout=timeout)
     last: BaseException | None = None
     for name in names:
         ctx = _ctx(name)
         if ctx is None:
             continue
         try:
-            res = urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx)
+            res = urllib.request.urlopen(req, timeout=timeout, context=ctx)
         except urllib.error.HTTPError:
             _working = name     # the connection worked; the site answered with an error
             raise
@@ -325,6 +325,18 @@ def pull(cls: dict, embed: Embedder) -> int:
     return received
 
 
+# ── diagnostic reports ───────────────────────────────────────────────────
+
+REPORT_MAX = 200_000  # characters; the website refuses more
+
+
+def send_report(summary: str, text: str, app_version: str) -> dict:
+    """Upload a diagnostic report the user chose to send. Returns {"id": ...}."""
+    return _request("POST", "/api/host/reports", {
+        "summary": summary[:200], "text": text[-REPORT_MAX:], "app_version": app_version[:40],
+    })
+
+
 # ── diagnostics (Settings → Diagnostics) ─────────────────────────────────
 
 def _cert_summary(der: bytes | None) -> str:
@@ -432,7 +444,7 @@ def diagnose(timeout: float = 8.0) -> dict:
 
     def health() -> str:
         req = urllib.request.Request(base + "/api/health", headers={"User-Agent": "Presentia-Desktop"})
-        with _urlopen(req) as res:
+        with _urlopen(req, timeout) as res:
             date = res.headers.get("Date")
             if date:
                 server_time.append(parsedate_to_datetime(date))

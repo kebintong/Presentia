@@ -81,6 +81,39 @@ clicked through without a real face (the desktop still checks the photos itself)
 - The privacy notice (`public/privacy.html`) refers to the Data Privacy Act of 2012. Have your school's data
   protection officer review it before using this with students.
 
+## Diagnostic reports from the desktop app
+
+When diagnostic mode is on (desktop app: Settings → Diagnostics) and something fails, the instructor can press
+**Send report**. They see the whole report first. It is stored in the `reports` table for **30 days** (the
+Worker creates the table itself; nothing to set up), and the app shows a report ID such as `R-91708279`.
+
+Read reports in the Cloudflare dashboard → **Storage & Databases → D1 → presentia → Console**:
+
+```
+SELECT id, created_at, app_version, summary FROM reports ORDER BY created_at DESC;
+SELECT body FROM reports WHERE id = 'R-91708279';
+```
+
+Only installs of the desktop app (with their own credentials) can send reports, at most 20 per hour per network.
+
+### Optional: also open a GitHub issue for each report
+
+Reports can contain student names and numbers, so issues are only created in a **private** repository. The
+Worker checks this and skips public repositories (the main Presentia repository is public, so use a separate one).
+
+1. On GitHub, create a new **private** repository, for example `presentia-reports`.
+2. GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate new token. Repository access:
+   **Only select repositories** → `presentia-reports`. Permissions → Repository → **Issues: Read and write**.
+   Copy the token.
+3. Cloudflare dashboard → Workers & Pages → **presentia** → Settings → **Variables and Secrets** → Add, twice,
+   both of type **Secret**:
+   - `GITHUB_TOKEN` = the token
+   - `REPORTS_REPO` = `your-github-name/presentia-reports`
+4. Send a test report from the app. A new issue titled `[R-…] …` appears in the private repository.
+
+If the token expires or is wrong, reports are still stored in D1; the Worker's logs (Workers → presentia →
+Logs) say why no issue was created.
+
 ## Limits on the free plan
 
 Cloudflare's free plan includes 100,000 Worker requests per day, and D1 allows 5 million rows read and

@@ -15,6 +15,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 
 import cv2
 import numpy as np
@@ -42,6 +43,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Polled several times a second; only logged when they fail.
+_QUIET_PATHS = ("/api/engine/status", "/api/monitor/", "/api/diagnostics", "/api/screen/screenshot")
+
+
+@app.middleware("http")
+async def _diagnostic_log(request, call_next):
+    """Diagnostic mode: one activity-log line per request. Always: crashes
+    go to the recent-problems list."""
+    started = time.perf_counter()
+    path = request.url.path
+    try:
+        response = await call_next(request)
+    except Exception as exc:  # noqa: BLE001
+        diag.record("engine", f"{request.method} {path} crashed: {exc!r}")
+        diag.log(traceback.format_exc().rstrip(), "error")
+        raise
+    if diag.enabled and request.method != "OPTIONS":
+        status = response.status_code
+        if status >= 400 or not path.startswith(_QUIET_PATHS):
+            ms = round((time.perf_counter() - started) * 1000)
+            diag.log(f"{request.method} {path} -> {status} ({ms} ms)",
+                     "error" if status >= 500 else "warning" if status >= 400 else "info")
+    return response
 
 # ── Background model preload ──────────────────────────────────────────────────
 _engine_ready = threading.Event()
@@ -143,6 +168,25 @@ class OnlineToggle(BaseModel):
     enabled: bool
 
 
+class DiagnosticMode(BaseModel):
+    enabled: bool
+
+
+class ClientEvent(BaseModel):
+    """A problem the app's screens ran into (failed request, script error)."""
+    kind: str = "error"
+    title: str = ""
+    message: str = ""
+    path: str = ""
+    status: int = 0
+
+
+class ReportUpload(BaseModel):
+    summary: str = ""
+    text: str
+    app_version: str = ""
+
+
 class StatusUpdate(BaseModel):
     status: str
 
@@ -169,7 +213,7 @@ async def engine_status() -> dict:
 
 
 @app.get("/api/diagnostics")
-async def diagnostics() -> dict:
+async def diagnostics(network: bool = True) -> dict:
     """Settings → Diagnostics: this computer, the website connection step by
     step, recent problems and the end of the sidecar log. Nothing is sent
     anywhere; the instructor copies the report themselves."""
@@ -215,14 +259,56 @@ async def diagnostics() -> dict:
         except OSError:
             return ""
 
-    network = await asyncio.to_thread(cloud.diagnose)
+    net = await asyncio.to_thread(cloud.diagnose, 5.0) if network else None
     return {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "system": system(),
-        "network": network,
+        "network": net,
         "recent": diag.recent(),
         "log": log_tail(),
+        "mode": diag.mode(),
     }
+
+
+@app.get("/api/diagnostics/mode")
+async def diagnostic_mode() -> dict:
+    return diag.mode()
+
+
+@app.put("/api/diagnostics/mode")
+async def set_diagnostic_mode(body: DiagnosticMode) -> dict:
+    return diag.set_mode(body.enabled)
+
+
+@app.post("/api/diagnostics/event", status_code=204)
+async def diagnostic_event(body: ClientEvent) -> None:
+    where = f" ({body.path} → {body.status})" if body.path else ""
+    diag.record("app", f"{body.title or body.kind}: {body.message}{where}",
+                "warning" if body.kind == "warning" else "error")
+
+
+@app.get("/api/diagnostics/log")
+async def diagnostic_log(lines: int = 400) -> dict:
+    return {"text": diag.read_log(max(1, min(lines, 5000))), "path": str(diag.log_path()),
+            "size": diag.log_size(), "enabled": diag.enabled}
+
+
+@app.delete("/api/diagnostics/log", status_code=204)
+async def clear_diagnostic_log() -> None:
+    diag.clear_log()
+
+
+@app.post("/api/diagnostics/send")
+async def send_diagnostic_report(body: ReportUpload) -> dict:
+    """Upload a report the user has seen and agreed to send."""
+    if not body.text.strip():
+        raise HTTPException(status_code=400, detail="The report is empty.")
+    try:
+        out = await asyncio.to_thread(cloud.send_report, body.summary, body.text, body.app_version)
+    except cloud.CloudError as exc:
+        raise _cloud_error(exc) from exc
+    diag.log(f"Report {out.get('id')} sent.")
+    return out
 
 
 @app.post("/api/shutdown", status_code=204)
