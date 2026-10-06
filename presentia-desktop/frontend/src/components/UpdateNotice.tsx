@@ -73,7 +73,11 @@ export default function UpdateNotice({
     setLater(until)
   }
 
-  const text = summary(update?.notes || '')
+  const missed = update?.releases?.length ?? 0
+  const gist = summary(update?.notes || '')
+  const text = missed > 1
+    ? `${missed} updates since your version.${gist ? ` Newest: ${gist}` : ''}`
+    : gist
 
   return (
     <div className="update-notice" role="status" aria-live="polite">

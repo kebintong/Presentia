@@ -6,6 +6,7 @@ import AccessibilitySettings from './AccessibilitySettings'
 import DiagnosticsSettings from './DiagnosticsSettings'
 import DataSettings from './DataSettings'
 import ReleaseNotes from './ReleaseNotes'
+import UpdateHistory, { ReleaseNote } from './UpdateHistory'
 
 export interface UpdateInfo {
   available: boolean
@@ -14,6 +15,8 @@ export interface UpdateInfo {
   notes: string
   url: string
   checkedAt: string
+  /** Every release newer than this computer's version, newest first. */
+  releases?: ReleaseNote[]
 }
 
 type Phase = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
@@ -84,6 +87,8 @@ export default function SettingsPanel({
   }, [open])
 
   if (!open) return null
+
+  const missed = update?.releases?.length ?? 0
 
   const recheck = async () => {
     setPhase('checking')
@@ -250,7 +255,9 @@ export default function SettingsPanel({
               </div>
               <div className="settings-row-sub">
                 {update?.available
-                  ? `Version ${update.latest} is ready to install`
+                  ? (missed > 1
+                      ? `Version ${update.latest} is ready — ${missed} updates since your version. One install brings you up to date.`
+                      : `Version ${update.latest} is ready to install`)
                   : 'You are running the latest version'}
               </div>
             </div>
@@ -262,9 +269,15 @@ export default function SettingsPanel({
           </div>
 
           {update?.available && (
-            <div className="settings-notes">
-              <ReleaseNotes body={update.notes} empty="No details were given for this version." />
-            </div>
+            missed > 0 ? (
+              <div className="settings-notes update-history-box">
+                <UpdateHistory releases={update.releases!} />
+              </div>
+            ) : (
+              <div className="settings-notes">
+                <ReleaseNotes body={update.notes} empty="No details were given for this version." />
+              </div>
+            )
           )}
 
           {update?.available && (

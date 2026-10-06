@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -64,17 +65,32 @@ type UpdateInfo struct {
 	Notes     string `json:"notes"`
 	URL       string `json:"url"`
 	CheckedAt string `json:"checkedAt"`
+	// Every published release newer than the running version, newest first,
+	// so someone several versions behind sees everything they missed.
+	Releases []ReleaseNote `json:"releases,omitempty"`
 }
+
+// ReleaseNote is one published release's notes.
+type ReleaseNote struct {
+	Version string `json:"version"`
+	Notes   string `json:"notes"`
+	Date    string `json:"date"` // RFC 3339, when it was published
+}
+
+// How many releases are kept in the cache (the newest ones). Someone further
+// behind than this still gets the update; the oldest notes are left out.
+const maxReleaseNotes = 40
 
 // ghRelease mirrors the parts of GitHub's release JSON that matter here.
 type ghRelease struct {
-	TagName    string `json:"tag_name"`
-	Name       string `json:"name"`
-	Body       string `json:"body"`
-	HTMLURL    string `json:"html_url"`
-	Draft      bool   `json:"draft"`
-	Prerelease bool   `json:"prerelease"`
-	Assets     []struct {
+	TagName     string `json:"tag_name"`
+	Name        string `json:"name"`
+	Body        string `json:"body"`
+	HTMLURL     string `json:"html_url"`
+	Draft       bool   `json:"draft"`
+	Prerelease  bool   `json:"prerelease"`
+	PublishedAt string `json:"published_at"`
+	Assets      []struct {
 		Name string `json:"name"`
 		URL  string `json:"browser_download_url"`
 	} `json:"assets"`
@@ -108,14 +124,22 @@ func (a *App) CheckForUpdate(force bool) (UpdateInfo, error) {
 	// Cheap check: which tag is the newest release? Same as last time means
 	// the cached notes and download link are still right.
 	tag, tagErr := latestReleaseTag()
-	if tagErr == nil && haveCache && cached.Latest != "" &&
+	if tagErr == nil && haveCache && cached.Latest != "" && len(cached.Releases) > 0 &&
 		strings.TrimPrefix(tag, "v") == cached.Latest {
 		cached.CheckedAt = time.Now().Format(time.RFC3339)
 		writeUpdateCache(cachePath, cached)
 		return reevaluate(cached), nil
 	}
 
-	rel, err := fetchLatestRelease()
+	// One request for the recent releases: the newest one, and the notes of
+	// every version in between. If that fails, the single newest release.
+	rels, err := fetchReleases()
+	if err != nil || len(rels) == 0 {
+		var rel *ghRelease
+		if rel, err = fetchLatestRelease(); err == nil {
+			rels = []ghRelease{*rel}
+		}
+	}
 	if err != nil {
 		if tagErr == nil && tag != "" {
 			// The API is unavailable (most likely rate-limited) but the tag is
@@ -137,29 +161,72 @@ func (a *App) CheckForUpdate(force bool) (UpdateInfo, error) {
 		return info, err
 	}
 
-	info.Latest = strings.TrimPrefix(rel.TagName, "v")
-	info.Notes = strings.TrimSpace(rel.Body)
-	info.URL = rel.HTMLURL
+	info = infoFromReleases(rels)
+	if info.Latest == "" {
+		info.Current = AppVersion
+		return info, fmt.Errorf("no published release found")
+	}
 	info.CheckedAt = time.Now().Format(time.RFC3339)
+	writeUpdateCache(cachePath, info)
+	return reevaluate(info), nil
+}
 
+// infoFromReleases builds the answer from GitHub's release list: the newest
+// published version (drafts and pre-releases never count), its installer,
+// and the notes of the newest maxReleaseNotes releases, newest first. The
+// cache keeps them all; reevaluate trims to what the running version lacks.
+func infoFromReleases(rels []ghRelease) UpdateInfo {
+	var published []ghRelease
+	for _, r := range rels {
+		if r.Draft || r.Prerelease || !releaseTag.MatchString(r.TagName) {
+			continue
+		}
+		published = append(published, r)
+	}
+	sort.SliceStable(published, func(i, j int) bool {
+		return versionLess(published[j].TagName, published[i].TagName)
+	})
+	info := UpdateInfo{Current: AppVersion}
+	if len(published) == 0 {
+		return info
+	}
+	newest := published[0]
+	info.Latest = strings.TrimPrefix(newest.TagName, "v")
+	info.Notes = strings.TrimSpace(newest.Body)
+	info.URL = newest.HTMLURL
 	// Prefer linking straight at the installer when the release has one.
-	for _, asset := range rel.Assets {
+	for _, asset := range newest.Assets {
 		if strings.HasSuffix(strings.ToLower(asset.Name), ".exe") {
 			info.URL = asset.URL
 			break
 		}
 	}
-
-	info.Available = info.Latest != "" && versionLess(AppVersion, info.Latest)
-	writeUpdateCache(cachePath, info)
-	return info, nil
+	for i, r := range published {
+		if i == maxReleaseNotes {
+			break
+		}
+		info.Releases = append(info.Releases, ReleaseNote{
+			Version: strings.TrimPrefix(r.TagName, "v"),
+			Notes:   strings.TrimSpace(r.Body),
+			Date:    r.PublishedAt,
+		})
+	}
+	return info
 }
 
 // reevaluate compares a stored answer with the running build: an upgraded app
 // must stop showing a notice for a version it now IS.
+// The notes are trimmed to the versions it does not have yet.
 func reevaluate(cached UpdateInfo) UpdateInfo {
 	cached.Current = AppVersion
 	cached.Available = cached.Latest != "" && versionLess(AppVersion, cached.Latest)
+	var missed []ReleaseNote
+	for _, r := range cached.Releases {
+		if versionLess(AppVersion, r.Version) {
+			missed = append(missed, r)
+		}
+	}
+	cached.Releases = missed
 	return cached
 }
 
@@ -366,6 +433,31 @@ func tagFromLocation(status int, location string) (string, error) {
 		return "", fmt.Errorf("unexpected release tag %q", tag)
 	}
 	return tag, nil
+}
+
+// fetchReleases lists the repository's recent releases (one API request).
+func fetchReleases() ([]ghRelease, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=%d", GitHubRepo, maxReleaseNotes+10)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Presentia-Updater/"+AppVersion)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github returned %s", resp.Status)
+	}
+	var rels []ghRelease
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&rels); err != nil {
+		return nil, err
+	}
+	return rels, nil
 }
 
 func fetchLatestRelease() (*ghRelease, error) {

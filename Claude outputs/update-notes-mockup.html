@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Update notes mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0B1222; --surface: #16203A; --surface-hi: #1C2846; --row: #121B31; --row-border: #26324A;
+    --ink: #E8EDF6; --heading: #FFFFFF; --muted: #93A1B8; --muted-lo: #5A6A84;
+    --accent: #42D4F9; --accent-tint: rgba(66,212,249,.14); --accent-line: rgba(66,212,249,.32);
+    --border: #26324A;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+    font-family: Manrope, system-ui, sans-serif; padding: 28px 16px 140px; }
+  .label { max-width: 560px; margin: 0 auto 10px; font-size: 12px; color: var(--muted-lo);
+    text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+  .panel { max-width: 560px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 18px; padding: 20px 22px; display: flex; flex-direction: column; gap: 16px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.35); }
+  .head { display: flex; justify-content: space-between; align-items: center; }
+  .title { font-family: Poppins, sans-serif; font-weight: 600; font-size: 17px; color: var(--heading);
+    display: flex; gap: 10px; align-items: center; }
+  .x { border: 1px solid var(--border); background: none; color: var(--muted); border-radius: 9px;
+    padding: 4px 10px; font-size: 12px; }
+  .tabs { display: flex; gap: 2px; padding: 4px; border: 1px solid var(--border); border-radius: 12px;
+    overflow-x: auto; }
+  .tab { padding: 7px 12px; font-size: 12.5px; font-weight: 600; color: var(--muted); border-radius: 9px;
+    white-space: nowrap; }
+  .tab.on { background: var(--surface-hi); color: var(--heading); }
+  .tab .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+    margin-left: 5px; vertical-align: middle; }
+  .field { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+  .row { border: 1px solid var(--row-border); background: var(--row); border-radius: 12px; padding: 12px 14px;
+    display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .row-title { font-weight: 700; color: var(--heading); font-size: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pill { font-size: 10px; font-weight: 800; letter-spacing: .06em; color: var(--accent); background: var(--accent-tint);
+    border-radius: 99px; padding: 3px 8px; }
+  .sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .notes { border: 1px solid var(--row-border); background: var(--row); border-radius: 12px; max-height: 330px;
+    overflow: auto; }
+  .ver { border-bottom: 1px solid var(--row-border); }
+  .ver:last-child { border-bottom: 0; }
+  .ver-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 14px; background: none;
+    border: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+  .ver-head:hover { background: rgba(255,255,255,.025); }
+  .chev { width: 14px; color: var(--muted-lo); transition: transform .18s ease; flex: none; }
+  .ver.open .chev { transform: rotate(90deg); }
+  .ver-name { font-weight: 700; color: var(--heading); font-size: 13px; }
+  .ver-tag { font-size: 10px; font-weight: 800; letter-spacing: .05em; color: var(--accent); background: var(--accent-tint);
+    border-radius: 99px; padding: 2px 7px; }
+  .ver-date { margin-left: auto; font-size: 11.5px; color: var(--muted-lo); }
+  .ver-body { display: none; padding: 0 16px 13px 38px; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+  .ver.open .ver-body { display: block; }
+  .ver-body p { margin: 0 0 6px; }
+  .ver-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+  .ver-body strong { color: var(--heading); font-weight: 650; }
+  .more { padding: 10px 14px; font-size: 12px; color: var(--muted-lo); text-align: center; }
+  .actions { display: flex; gap: 8px; align-items: center; }
+  .btn { border-radius: 10px; padding: 9px 14px; font: 700 12.5px Manrope, sans-serif; border: 1px solid transparent; cursor: pointer; }
+  .primary { background: var(--accent); color: #062033; }
+  .ghost { background: none; border-color: var(--border); color: var(--ink); }
+  .hint { font-size: 12px; color: var(--muted-lo); }
+
+  .notice { position: fixed; right: 16px; bottom: 16px; width: min(360px, calc(100vw - 32px));
+    background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 14px; padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.45);
+    display: flex; flex-direction: column; gap: 10px; }
+  .n-title { font-size: 13px; font-weight: 700; color: var(--heading); }
+  .n-text { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .n-actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .n-actions .btn { padding: 6px 12px; font-size: 12px; }
+  .callout { position: fixed; right: 16px; bottom: 150px; width: min(360px, calc(100vw - 32px));
+    font-size: 11.5px; color: var(--muted-lo); text-align: right; }
+</style>
+</head>
+<body>
+  <div class="label">Mockup: Settings → Updates on a computer still running 1.2.1 (example notes)</div>
+
+  <div class="panel">
+    <div class="head">
+      <div class="title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
+        Settings
+      </div>
+      <button class="x">✕</button>
+    </div>
+
+    <div class="tabs">
+      <span class="tab">Appearance</span><span class="tab">Performance</span><span class="tab">Accessibility</span>
+      <span class="tab on">Updates<span class="dot"></span></span><span class="tab">Data</span><span class="tab">Diagnostics</span>
+    </div>
+
+    <div class="field">UPDATES</div>
+
+    <div class="row">
+      <div>
+        <div class="row-title">Presentia 1.2.1 <span class="pill">UPDATE AVAILABLE</span></div>
+        <div class="sub">Version 1.5.5 is ready — 9 updates since your version. One install brings you up to date.</div>
+      </div>
+    </div>
+
+    <div class="notes" id="notes">
+      <div class="ver open">
+        <button class="ver-head"><span class="chev">▶</span><span class="ver-name">1.5.5</span><span class="ver-tag">NEWEST</span><span class="ver-date">Oct 2026</span></button>
+        <div class="ver-body">
+          <p><strong>Presentia now tells you when an update is available.</strong></p>
+          <ul>
+            <li>It checks automatically and shows a notice in the corner — never during monitoring.</li>
+            <li>Update notes are easier to read.</li>
+            <li><strong>Online registration</strong> is now at the top of the Student Registration page.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="ver open">
+        <button class="ver-head"><span class="chev">▶</span><span class="ver-name">1.5.4</span><span class="ver-date">Oct 2026</span></button>
+        <div class="ver-body">
+          <p><strong>Monitoring keeps going while other windows cover the meeting.</strong></p>
+          <ul>
+            <li>Meeting minimised? Use <strong>Keep monitoring</strong> on the Meeting Monitor page.</li>
+            <li>Meetings in Chrome, Edge or Brave: leave a small part showing when you cover them.</li>
+            <li>When monitoring pauses, the status says why.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="ver">
+        <button class="ver-head"><span class="chev">▶</span><span class="ver-name">1.5.3</span><span class="ver-date">Oct 2026</span></button>
+        <div class="ver-body">
+          <ul>
+            <li>A student can join several classes with the same face, but never twice in one class.</li>
+            <li>New <strong>Data</strong> tab in Settings, with <strong>Delete all data</strong>.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="ver">
+        <button class="ver-head"><span class="chev">▶</span><span class="ver-name">1.5.2</span><span class="ver-date">Oct 2026</span></button>
+        <div class="ver-body">
+          <ul>
+            <li>The same face can't be registered as two students.</li>
+            <li>Fixed "could not reach the registration website" on some laptops.</li>
+            <li>New <strong>diagnostic mode</strong> for reporting problems.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="ver">
+        <button class="ver-head"><span class="chev">▶</span><span class="ver-name">1.5.1</span><span class="ver-date">Oct 2026</span></button>
+        <div class="ver-body"><ul><li>Smooth animations, with a switch to turn them off.</li><li>Double-clicking the top bar no longer resizes the window by mistake.</li></ul></div>
+      </div>
+      <div class="more">and 4 earlier updates (1.3.0 – 1.5.0) · <a href="#" style="color:var(--accent)">show all</a></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn primary">Download update</button>
+      <span class="hint">About 100 MB · your classes and attendance stay as they are</span>
+    </div>
+  </div>
+
+  <div class="callout">The corner notice, outside monitoring ↓</div>
+  <div class="notice">
+    <div>
+      <div class="n-title">Presentia 1.5.5 is available</div>
+      <div class="n-text">9 updates since your version, including automatic update checks and monitoring behind other windows.</div>
+    </div>
+    <div class="n-actions">
+      <button class="btn ghost">Later</button>
+      <button class="btn primary">See what's new</button>
+    </div>
+  </div>
+
+<script>
+  document.querySelectorAll('.ver-head').forEach(function (b) {
+    b.addEventListener('click', function () { b.parentElement.classList.toggle('open') })
+  })
+</script>
+</body>
+</html>
