@@ -33,7 +33,8 @@ hiddenimports = []
 # model files directly), so it and its large dependencies stay out of the build.
 # certifi ships its root list as a data file (cacert.pem); truststore picks a
 # per-OS module at run time. collect_all brings both along.
-for pkg in ("onnxruntime", "mediapipe", "cv2", "uvicorn", "certifi", "truststore"):
+# windows_capture (Windows Graphics Capture) is a compiled extension (.pyd).
+for pkg in ("onnxruntime", "mediapipe", "cv2", "uvicorn", "certifi", "truststore", "windows_capture"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -62,6 +63,7 @@ hiddenimports += [
     "truststore._windows",
     "truststore._api",
     "certifi",
+    "windows_capture",
 ]
 
 # Presentia's own modules. sidecar.py imports several of these *inside*
@@ -77,6 +79,7 @@ hiddenimports += [
     "app.data.export",
     "app.data.xlsx",
     "app.core.camera",
+    "app.core.window_capture",
     "app.core.enrollment",
     "app.core.face_engine",
     "app.core.face_models",

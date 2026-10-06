@@ -128,6 +128,26 @@ to build that React step-through next; it'd live in
 `presentia-desktop/frontend/src/pages/` alongside your other pages and
 gate on a flag like `localStorage.getItem('setupComplete')`.
 
+## Checking window monitoring by hand
+
+Window capture talks to Windows itself, so CI can only check that the
+library is bundled (the smoke test's "Window capture" line). Before a
+release that touches `app/core/window_capture.py` or `_WindowFollower`,
+try it on a real PC with a meeting (or any video) in Chrome/Edge/Brave and
+in the Zoom or Teams app:
+
+| Do this while monitoring | Expected |
+| --- | --- |
+| Cover half of the meeting with File Explorer | Keeps monitoring, boxes stay on the right faces |
+| Cover the meeting completely (Zoom/Teams app) | Keeps monitoring |
+| Cover a browser meeting completely | After ~3 s: "Paused: window fully covered"; resumes when a corner shows |
+| Minimise the meeting (or Win+D) | "Paused: window minimised"; **Keep monitoring** puts it back behind other windows |
+| Close the meeting window | "was closed — monitoring paused" |
+
+Settings → Diagnostics → *Window capture* shows the library version; with
+diagnostic mode on, the activity log records which capture method was used
+and every pause/resume.
+
 ## Releasing (the Release button)
 
 Releases are built on GitHub, not on your PC (`.github/workflows/release.yml`):

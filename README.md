@@ -79,8 +79,11 @@ face data, and nobody can be in the same class twice.
   and the app won't accept someone else's face under a known student number.
 
 ### Meeting Monitor (Google Meet, Zoom, Teams)
-- **Select a window or a screen area**; on Windows a selected window is captured directly, so it can be moved
-  or partly covered (minimising it pauses monitoring).
+- **Select a window or a screen area**; on Windows a selected window is captured with Windows Graphics Capture,
+  so it keeps being monitored while it is moved or covered by other windows. A minimised window can't be read:
+  **Keep monitoring** puts it back behind your other windows. Chrome, Edge and Brave stop drawing a window that
+  is *completely* covered, so for a browser meeting leave any part of it showing; Presentia pauses and says so
+  rather than reading an old picture.
 - **Multi-face recognition** in all visible tiles, with each student tracked as *waiting → present → missing*.
 - **Unknown faces** are listed with one-click enrolment.
 - **Random action check** on a student's tile (blink, turn, look up) to catch photos or recordings; works for
@@ -148,7 +151,7 @@ face data, and nobody can be in the same class twice.
 │  ┌──────────────────────────────▼─────────────────────────────────────┐  │
 │  │  Engine: Python 3.12 + FastAPI (frozen with PyInstaller)           │  │
 │  │  SCRFD / YuNet detection + ArcFace embeddings (ONNX Runtime)       │  │
-│  │  MediaPipe liveness · MiniFASNet replay check · MSS / PrintWindow  │  │
+│  │  MediaPipe liveness · MiniFASNet replay check · MSS / WGC capture  │  │
 │  │  SQLite attendance.db                                              │  │
 │  └──────────────────────────────┬─────────────────────────────────────┘  │
 └─────────────────────────────────┼────────────────────────────────────────┘
@@ -288,6 +291,7 @@ Presentia/
 │   │   ├── screen.py, tile_tracker.py  # Screen / window capture, tile tracking
 │   │   ├── enrollment.py, camera.py    # Guided 5-pose enrolment, webcam capture
 │   │   ├── perf.py                     # Devices, profiles, benchmark
+│   │   ├── window_capture.py           # Windows Graphics Capture, covered-window checks
 │   │   └── diag.py                     # Recent problems, diagnostic mode, activity log
 │   ├── data/
 │   │   ├── db.py                       # SQLite schema + versioned migrations

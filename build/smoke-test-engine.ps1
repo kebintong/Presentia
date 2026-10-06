@@ -6,7 +6,8 @@
   in development and fails with ModuleNotFoundError only once installed. This
   starts dist\presentia-sidecar\presentia-sidecar.exe and calls endpoints that
   load the lazily imported parts (Excel export, website/diagnostics, HTTPS
-  certificate libraries, ONNX Runtime). The face models are not downloaded.
+  certificate libraries, Windows Graphics Capture, ONNX Runtime). The face
+  models are not downloaded.
 
   Usage (from the project root, after pyinstaller):
       powershell -ExecutionPolicy Bypass -File build\smoke-test-engine.ps1
@@ -86,11 +87,12 @@ try {
         if ($bytes.Length -lt 4 -or $bytes[0] -ne 0x50 -or $bytes[1] -ne 0x4B) { throw 'not an .xlsx (zip) file' }
         "$($bytes.Length) bytes"
     }
-    Check 'diagnostics (certificates, diagnostic mode)' {
+    Check 'diagnostics (certificates, window capture, diagnostic mode)' {
         $d = (Call GET '/api/diagnostics?network=false').Content | ConvertFrom-Json
         $missing = @($d.system | Where-Object { $_.value -eq 'missing' } | ForEach-Object { $_.label })
         if ($missing.Count) { throw "missing in the build: $($missing -join ', ')" }
-        'truststore and certifi present'
+        $wgc = ($d.system | Where-Object { $_.label -eq 'Window capture' }).value
+        "truststore and certifi present; $wgc"
     }
     Check 'website settings' { ((Call GET '/api/cloud').Content | ConvertFrom-Json).url }
     Check 'data summary' { "$(((Call GET '/api/data/summary').Content | ConvertFrom-Json).classes) class" }

@@ -253,6 +253,9 @@ async def diagnostics(network: bool = True) -> dict:
                 rows.append((mod, getattr(m, "__version__", "present")))
             except Exception:  # noqa: BLE001
                 rows.append((mod, "missing"))
+        from app.core.window_capture import wgc_library
+
+        rows.append(("Window capture", wgc_library()))
         return [{"label": k, "value": v} for k, v in rows]
 
     def log_tail(lines: int = 60) -> str:
@@ -1235,18 +1238,27 @@ async def monitor_frame(after: int = 0) -> Response:
 class _WindowFollower:
     """Captures one top-level window, wherever it is (Windows only).
 
-    The window's own contents are rendered with PrintWindow
-    (PW_RENDERFULLCONTENT), so it keeps being monitored while it is covered
-    by other windows — e.g. after Alt+Tab to Chrome — or dragged partly off
-    screen. Only a minimised or closed window pauses monitoring.
+    In order of preference:
 
-    A few apps draw in a way PrintWindow cannot see and come back black. If
-    that keeps happening while the window is actually showing something, we
-    fall back to grabbing its area of the screen (which needs it visible) and
-    tell the instructor.
+    1. Windows Graphics Capture (app.core.window_capture): the window's own
+       picture from the desktop compositor, so it keeps being monitored
+       while other windows cover it — e.g. while the instructor looks for a
+       file — or when it is dragged partly off screen.
+    2. PrintWindow (PW_RENDERFULLCONTENT), on Windows versions without WGC.
+       Some apps answer it with a black picture.
+    3. Grabbing the window's area of the screen. That shows whatever is on
+       top, so it is only used while the window is actually uncovered, and
+       window capture is retried every few seconds.
+
+    Monitoring pauses — and says why — when the window is minimised or
+    closed, and when a browser has stopped drawing it because it is
+    completely covered: an old picture must never count as "present".
     """
 
     BLACK_FRAMES_BEFORE_FALLBACK = 8
+    STALE_AFTER = 2.5           # s without a new WGC picture before checking why
+    RETRY_WINDOW_CAPTURE = 5.0  # s between PrintWindow retries in screen mode
+    SCREEN_VISIBLE_MIN = 0.97   # screen grabs only of an uncovered window
 
     def __init__(self, hwnd: int, title: str) -> None:
         import ctypes
@@ -1285,15 +1297,53 @@ class _WindowFollower:
         self._size = (0, 0)
         self._black = 0
         self.screen_only = False  # PrintWindow can't see this app
+        self._screen_since = 0.0
+        self._wgc = None
+        self._wgc_seq = 0
+        self._vis = (0.0, 1.0)    # (when, visible fraction): cached briefly
+        self.method = "printwindow"
 
     @classmethod
-    def create(cls, hwnd, title: str) -> "_WindowFollower | None":
+    def create(cls, hwnd, title: str, max_fps: float = 30.0) -> "_WindowFollower | None":
         if sys.platform != "win32" or not hwnd:
             return None
         try:
-            return cls(int(hwnd), title)
+            follower = cls(int(hwnd), title)
         except Exception:  # noqa: BLE001
             return None
+        try:
+            follower._start_wgc(max_fps)
+        except Exception as exc:  # noqa: BLE001 — PrintWindow still works
+            diag.log(f"Window capture: could not start Windows Graphics Capture: {exc!r}", "warning")
+        return follower
+
+    def _start_wgc(self, max_fps: float) -> None:
+        from app.core.window_capture import WgcCapture
+
+        wgc = WgcCapture(int(self.hwnd.value or 0), max_fps=max_fps)
+        if wgc.start():
+            self._wgc = wgc
+            self.method = "wgc"
+            diag.log("Window capture: Windows Graphics Capture"
+                     + (" (Windows draws a yellow border around the window)" if wgc.border else ""))
+        else:
+            diag.log(f"Window capture: PrintWindow (Windows Graphics Capture unavailable: {wgc.error})",
+                     "warning")
+
+    def visible(self, monitors: list) -> float:
+        """Share of the window showing on screen, refreshed at most twice a second."""
+        from app.core.window_capture import visible_fraction
+
+        now = time.monotonic()
+        if now - self._vis[0] > 0.5:
+            self._vis = (now, visible_fraction(int(self.hwnd.value or 0), monitors))
+        return self._vis[1]
+
+    def restore_behind(self) -> bool:
+        from app.core.window_capture import restore_behind
+
+        self._vis = (0.0, 1.0)
+        return restore_behind(int(self.hwnd.value or 0))
 
     # -- geometry --------------------------------------------------------
 
@@ -1366,50 +1416,123 @@ class _WindowFollower:
         shot = sct.grab({"left": left, "top": top, "width": right - left, "height": bottom - top})
         return np.ascontiguousarray(np.asarray(shot, dtype=np.uint8)[:, :, :3])
 
-    def capture(self, sct, desktop: dict) -> tuple[str, np.ndarray | None]:
-        """(state, BGR frame or None). States: ok, minimized, closed,
-        offscreen (screen-only mode), screen_only (switched to screen mode)."""
+    def capture(self, sct, desktop: dict, monitors: list) -> tuple[str, np.ndarray | None]:
+        """(state, BGR frame or None).
+
+        States with a frame: ok (the window's own picture), screen_only (its
+        area of the screen, while uncovered). Paused, without a frame:
+        minimized, closed, hidden (completely covered and no longer drawn),
+        covered (screen mode, and something is on top of it)."""
         st = self.state()
         if st != "ok":
             return st, None
         wr, fr = self._rects()
         if wr is None:
             return "closed", None
+
+        if self._wgc is not None:
+            got = self._from_wgc(monitors)
+            if got is not None:
+                return got
+
+        now = time.monotonic()
+        if self.screen_only and now - self._screen_since >= self.RETRY_WINDOW_CAPTURE:
+            # The app may draw normally again (e.g. it was only blank while
+            # loading): try the window itself every few seconds.
+            self._screen_since = now
+            frame = self._print_window(wr, fr)
+            if self._readable(frame):
+                self.screen_only = False
+                self._black = 0
+                return "ok", frame
         if not self.screen_only:
             frame = self._print_window(wr, fr)
-            if frame is not None and frame.size and frame[::8, ::8].max() > 12:
+            if self._readable(frame):
                 self._black = 0
                 return "ok", frame
             self._black += 1
             if self._black < self.BLACK_FRAMES_BEFORE_FALLBACK:
                 return "ok", None  # a transient blank frame; try again
             self.screen_only = True
+            self._screen_since = now
             self.close()
-            frame = self._screen_grab(sct, desktop, fr)
-            return "screen_only", frame
+        # Screen mode: the screen shows whatever is on top, so read it only
+        # while the window is (practically) uncovered.
+        if self.visible(monitors) < self.SCREEN_VISIBLE_MIN:
+            return "covered", None
         frame = self._screen_grab(sct, desktop, fr)
-        return ("screen_only" if frame is not None else "offscreen"), frame
+        return ("screen_only", frame) if frame is not None else ("covered", None)
+
+    @staticmethod
+    def _readable(frame: np.ndarray | None) -> bool:
+        return frame is not None and bool(frame.size) and int(frame[::8, ::8].max()) > 12
+
+    def _from_wgc(self, monitors: list) -> tuple[str, np.ndarray | None] | None:
+        """A result from Windows Graphics Capture, or None to use PrintWindow."""
+        wgc = self._wgc
+        if not wgc.running:
+            # The capture ended although the window still exists (e.g. the
+            # graphics driver was reset). Carry on with PrintWindow.
+            diag.log("Window capture: Windows Graphics Capture stopped; using PrintWindow", "warning")
+            wgc.close()
+            self._wgc = None
+            self.method = "printwindow"
+            return None
+        got = wgc.latest()
+        if got is None:
+            return "ok", None  # no picture yet
+        frame, seq, age = got
+        if seq != self._wgc_seq or age < self.STALE_AFTER:
+            self._wgc_seq = seq
+            return "ok", frame
+        # No new picture for a while. Either nothing on it moved, or it is
+        # completely covered and the app (a browser) stopped drawing it — then
+        # this picture is old and must not be read as "everyone is still here".
+        if self.visible(monitors) > 0.0:
+            return "ok", frame
+        return "hidden", None
+
+    PAUSED = ("minimized", "closed", "hidden", "covered")
 
     def describe(self, state: str, previous: str) -> tuple[str, str] | None:
-        if state == "ok" or (state == "screen_only" and previous == "offscreen"):
-            if previous in ("minimized", "offscreen", "closed"):
-                return (f"{self.title} is back — monitoring resumed.", "ok")
+        t = self.title
+        if state == "ok":
+            if previous in self.PAUSED:
+                return (f"{t} is back — monitoring resumed.", "ok")
+            if previous == "screen_only":
+                return (f"{t} can be captured directly again, so it no longer has to stay uncovered.", "ok")
             return None
+        if state == "screen_only":
+            if previous in self.PAUSED:
+                return (f"{t} is back — monitoring resumed.", "ok")
+            return (f"{t} can't be captured directly, so it has to stay uncovered on screen "
+                    f"to be monitored. Monitoring pauses while something covers it.", "warn")
         return {
-            "minimized": (f"{self.title} is minimised — monitoring paused until it is restored.", "warn"),
-            "offscreen": (f"{self.title} is off-screen — monitoring paused.", "warn"),
-            "closed": (f"{self.title} was closed — monitoring paused. Select another window.", "error"),
-            "screen_only": (f"{self.title} can't be read while it is covered, so keep it visible "
-                            f"on screen for monitoring to work.", "warn"),
+            "minimized": (f"{t} is minimised — monitoring paused until it is restored. Keep monitoring "
+                          f"(Meeting Monitor page) puts it back behind your other windows.", "warn"),
+            "closed": (f"{t} was closed — monitoring paused. Select another window.", "error"),
+            "hidden": (f"{t} is completely covered and has stopped updating (browsers such as Chrome, "
+                       f"Edge and Brave stop drawing hidden windows). Monitoring is paused; leave any "
+                       f"part of it showing — even a corner — to continue.", "warn"),
+            "covered": (f"{t} is covered or off-screen — monitoring paused until it is visible again.",
+                        "warn"),
         }.get(state)
 
     def close(self) -> None:
+        """Free the PrintWindow buffer (window capture keeps running)."""
         if self._bmp:
             self._g32.DeleteObject(self._bmp)
         if self._dc:
             self._g32.DeleteDC(self._dc)
         self._dc = self._bmp = self._bits = None
         self._size = (0, 0)
+
+    def shutdown(self) -> None:
+        """Stop everything: monitoring of this window is over."""
+        self.close()
+        if self._wgc is not None:
+            self._wgc.close()
+            self._wgc = None
 
 
 # ── WebSocket helpers ─────────────────────────────────────────────────────────
@@ -1979,6 +2102,9 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
 
     frames = _FramePump(loop)
     send_lock = asyncio.Lock()
+    # The window being followed, for "Keep monitoring" (restore_window).
+    follower_box: list = [None]
+    follower_lock = threading.Lock()
     to_analyse = _LatestFrame()
     overlay: list[tuple[tuple[int, int, int, int], str, tuple[int, int, int]]] = []
     crop_cache: dict[int, tuple[float, str]] = {}
@@ -1992,19 +2118,33 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                 # A window picked with "Select Window" is captured directly,
                 # wherever it is and whatever covers it. A screen area is a
                 # fixed rectangle of the screen.
-                follow = _WindowFollower.create(region.get("hwnd"), region.get("title", ""))
+                # Copy pictures a little faster than the preview shows them.
+                follow = _WindowFollower.create(region.get("hwnd"), region.get("title", ""),
+                                                max_fps=min(30.0, PREVIEW_FPS * 2.0))
+                with follower_lock:
+                    follower_box[0] = follow
                 desktop = sct.monitors[0]
+                monitors = [(m["left"], m["top"], m["left"] + m["width"], m["top"] + m["height"])
+                            for m in sct.monitors[1:]] or [
+                    (desktop["left"], desktop["top"], desktop["left"] + desktop["width"],
+                     desktop["top"] + desktop["height"])]
                 state = "ok"
+                if follow is not None:
+                    _push({"type": "capture", "state": state, "method": follow.method,
+                           "title": follow.title})
                 while not stop.is_set() and not stop_event.is_set():
                     start = time.monotonic()
                     if follow is not None:
                         # The window itself, even behind other windows.
-                        now_state, frame = follow.capture(sct, desktop)
+                        now_state, frame = follow.capture(sct, desktop, monitors)
                         if now_state != state:
                             msg = follow.describe(now_state, state)
+                            diag.log(f"Window capture: {state} -> {now_state} ({follow.method})")
                             state = now_state
                             if msg:
                                 _push({"type": "alert", "message": msg[0], "level": msg[1]})
+                            _push({"type": "capture", "state": state, "method": follow.method,
+                                   "title": follow.title})
                         if frame is None:
                             time.sleep(0.2 if state != "ok" else 0.03)
                             continue
@@ -2039,8 +2179,11 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
         except Exception as exc:  # noqa: BLE001
             _push({"type": "error", "message": str(exc)})
         finally:
+            with follower_lock:
+                if follower_box[0] is follow:
+                    follower_box[0] = None
             if follow is not None:
-                follow.close()
+                follow.shutdown()
             to_analyse.put(None)
 
     def _analysis_thread(stop: threading.Event) -> None:
@@ -2323,6 +2466,16 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         tracker = None
                         roster_monitor = None
                     await _say({"type": "stopped"})
+
+                elif action == "restore_window":
+                    # A minimised meeting window has no picture at all: put
+                    # it back behind the other windows, without focusing it.
+                    with follower_lock:
+                        follow = follower_box[0]
+                    ok = follow is not None and await asyncio.to_thread(follow.restore_behind)
+                    if not ok:
+                        await _say({"type": "alert", "level": "warn",
+                                    "message": "Could not restore the window. Click it on the taskbar instead."})
 
                 elif action == "challenge":
                     raw_id = msg.get("student_id")

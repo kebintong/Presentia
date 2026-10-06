@@ -66,10 +66,20 @@ interface ScreenShot {
   top: number
 }
 
+// Capture states in which monitoring waits (see _WindowFollower in sidecar.py).
+const PAUSED_CAPTURE: Record<string, string> = {
+  minimized: 'window minimised',
+  closed: 'window closed',
+  hidden: 'window fully covered',
+  covered: 'window covered',
+}
+
 export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
   const [sessionName, setSessionName]   = useState('')
   const [missingAfter, setMissingAfter] = useState(5)
   const [monitoring, setMonitoring]     = useState(false)
+  // How the selected window is being captured, and whether that is paused.
+  const [capture, setCapture]           = useState<{ state: string; method: string } | null>(null)
   const [sessionId, setSessionId]       = useState<number | null>(null)
   // Live frames go straight from the socket to the canvas (see frameFeed);
   // React only tracks whether there is a picture at all.
@@ -222,7 +232,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
     // The window handle lets the sidecar follow the window if it is moved
     // or resized while monitoring.
     setRegion({ left: w.left, top: w.top, width: w.width, height: w.height, hwnd: w.hwnd, title: w.title })
-    addAlert(`Window selected: "${w.title}" — it stays monitored when moved or behind other windows (not when minimised).`, 'info')
+    addAlert(`Window selected: "${w.title}" — it stays monitored when moved or covered by other windows (not when minimised).`, 'info')
     closeWinPicker()
   }
 
@@ -268,6 +278,8 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
         setUnknowns((data.unknowns || []).map((u: any, i: number) => ({ ...u, index: i })))
       } else if (data.type === 'alert') {
         addAlert(data.message, data.level)
+      } else if (data.type === 'capture') {
+        setCapture({ state: data.state, method: data.method })
       } else if (data.type === 'enrolled') {
         addAlert(`${data.name} enrolled from meeting.`, 'ok')
       } else if (data.type === 'verify_started') {
@@ -290,7 +302,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
           : c)
       } else if (data.type === 'stopped') {
         setCheck(null)
-        setMonitoring(false); setSessionId(null); setFrame(null)
+        setMonitoring(false); setSessionId(null); setFrame(null); setCapture(null)
         addAlert('Monitoring stopped. Attendance recorded.', 'info')
         ws.close()
       } else if (data.type === 'error') {
@@ -299,7 +311,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
         setCheck((c) => c && c.phase === 'starting' ? { ...c, phase: 'choose', error: data.message } : c)
       }
     }
-    ws.onclose = () => { setMonitoring(false); setFrame(null) }
+    ws.onclose = () => { setMonitoring(false); setFrame(null); setCapture(null) }
     ws.onerror = () => addAlert('WebSocket connection error', 'error')
   }, [region, sessionName, missingAfter, classInfo.id])
 
@@ -412,11 +424,23 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                 </span>
               </div>
             )}
-            {monitoring && (
-              <div className="hero-status-pill" style={{ borderColor: 'var(--present)', color: 'var(--present)' }}>
+            {monitoring && (capture && PAUSED_CAPTURE[capture.state] ? (
+              <div className="hero-status-pill" style={{ borderColor: 'var(--warn)', color: 'var(--warn)' }}
+                   title="No picture of the window is available, so nobody is marked present or missing meanwhile">
+                <span>Paused: {PAUSED_CAPTURE[capture.state]}</span>
+              </div>
+            ) : (
+              <div className="hero-status-pill" style={{ borderColor: 'var(--present)', color: 'var(--present)' }}
+                   title={capture?.method === 'wgc' ? 'Captured with Windows Graphics Capture: other windows can cover it' : undefined}>
                 <span className="bubble-live-dot" />
                 <span>Monitoring Active</span>
               </div>
+            ))}
+            {monitoring && capture?.state === 'minimized' && (
+              <button className="btn-primary" onClick={() => sendWs({ action: 'restore_window' })}
+                      title="Un-minimise the window without bringing it to the front">
+                Keep monitoring
+              </button>
             )}
             {/* In-app pickers — the bubble is a convenience, not the only way
                 to choose what to monitor. */}
