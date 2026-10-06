@@ -472,6 +472,10 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
         </div>
       </section>
 
+      {/* Students can also register themselves on the website with the join
+          code: waiting registrations come first, above registering here. */}
+      <OnlineRegistration classInfo={classInfo} onRosterChanged={loadStudents} />
+
       {/* ── 3-Card Modular Dashboard Grid ────────────────────────────── */}
       <section className="cards-grid">
         {/* Card 1: Student Information & Controls */}
@@ -692,9 +696,6 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
           </PipWindow>
         )}
       </section>
-
-      {/* Students can also register themselves on the website with the join code. */}
-      <OnlineRegistration classInfo={classInfo} onRosterChanged={loadStudents} />
     </>
   )
 }

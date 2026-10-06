@@ -2,7 +2,8 @@ import React, { useState, useEffect, useLayoutEffect } from 'react'
 import TopBar from './components/TopBar'
 import { switchTheme } from './themeTransition'
 import Sidebar from './components/Sidebar'
-import SettingsPanel, { UpdateInfo } from './components/SettingsPanel'
+import SettingsPanel, { UpdateInfo, Tab as SettingsTab } from './components/SettingsPanel'
+import UpdateNotice from './components/UpdateNotice'
 import ProblemPrompt from './components/ProblemPrompt'
 import RegisterPage from './pages/RegisterPage'
 import MeetPage from './pages/MeetPage'
@@ -145,8 +146,11 @@ export default function App() {
       .then((v: string) => setVersion(v))
       .catch(() => {})
 
-    // Delayed so the check never competes with sidecar startup.
-    const timer = setTimeout(() => {
+    // At start-up (delayed so it never competes with the engine starting),
+    // then every hour while the app runs: Presentia often stays open for
+    // days in the tray. Go answers from its cache and asks GitHub at most
+    // every few hours (update.go).
+    const check = () => {
       app['CheckForUpdate']?.(false)
         .then((info: UpdateInfo) => {
           if (info?.available) setUpdate(info)
@@ -154,11 +158,18 @@ export default function App() {
         .catch(() => {
           // Offline or rate-limited — not something to bother the user with.
         })
-    }, 4000)
-    return () => clearTimeout(timer)
+    }
+    const first = setTimeout(check, 4000)
+    const hourly = setInterval(check, 60 * 60 * 1000)
+    return () => { clearTimeout(first); clearInterval(hourly) }
   }, [])
 
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
+  const openSettings = (tab: SettingsTab | null = null) => {
+    setSettingsTab(tab)
+    setSettingsOpen(true)
+  }
 
   // Manual re-check from the Settings panel, bypassing the daily throttle.
   const recheckUpdate = async (): Promise<UpdateInfo | null> => {
@@ -205,7 +216,7 @@ export default function App() {
             active={page}
             onNavigate={setPage}
             engineReady={engineReady}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={() => openSettings()}
             updateAvailable={!!update?.available}
             showNav={!!activeClass}
           />
@@ -229,7 +240,11 @@ export default function App() {
         animations={animations}
         onToggleAnimations={toggleAnimations}
         onRecheck={recheckUpdate}
+        focusTab={settingsTab}
       />
+
+      {/* A newer version is out: say so once, outside monitoring. */}
+      <UpdateNotice update={update} hidden={settingsOpen} onOpen={() => openSettings('updates')} />
 
       {/* Diagnostic mode: offers a report when something fails. */}
       <ProblemPrompt version={version} />

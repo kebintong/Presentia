@@ -1,0 +1,212 @@
+# Checks run on every push and pull request. A red X on a commit means
+# something below failed; open the "Actions" tab on GitHub to see which step.
+# The Release workflow runs these same checks before it builds anything, and
+# a green push to main that changed web/ deploys the registration website.
+name: CI
+
+on:
+  push:
+    # Dependabot branches are checked through their pull request instead,
+    # so they don't run twice.
+    branches-ignore: ["dependabot/**"]
+    paths-ignore: ["**.md", "Dev Ins.txt"]
+  pull_request:
+    paths-ignore: ["**.md", "Dev Ins.txt"]
+  workflow_dispatch:
+    inputs:
+      deploy_website:
+        description: "Also deploy the registration website (main only)"
+        type: boolean
+        default: false
+  workflow_call:
+
+# A newer push to the same branch cancels the older, still-running check,
+# except on main, where a run may be deploying the website.
+# github.workflow keeps runs called by Release apart from normal CI runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  sidecar:
+    name: Sidecar (Python tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # OpenCV and MediaPipe need these system libraries on Linux.
+      - name: System libraries
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libgl1 libegl1 libgles2
+
+      # PySide6 is only for the old Qt UI, which the sidecar does not use.
+      - name: Install dependencies
+        run: |
+          grep -v -i '^pyside6' requirements.txt > ci-requirements.txt
+          python -m pip install --upgrade pip
+          pip install -r ci-requirements.txt pytest httpx openpyxl
+
+      - name: Syntax check
+        run: python -m compileall -q app tools tests
+
+      - name: Tests
+        run: python -m pytest tests -q
+
+  frontend:
+    name: Desktop UI (TypeScript build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: presentia-desktop/frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: presentia-desktop/frontend/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Type check and build
+        run: npm run build
+
+      # The Windows job below embeds this build into the .exe.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: presentia-desktop/frontend/dist
+          retention-days: 3
+
+  desktop:
+    name: Desktop app (Windows build)
+    runs-on: windows-latest
+    needs: frontend
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: presentia-desktop
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: presentia-desktop/frontend/dist
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: presentia-desktop/go.mod
+          cache-dependency-path: presentia-desktop/go.sum
+
+      # Same Go build that "wails build" runs, without packaging. Catches
+      # compile errors in app.go, the bubble, the tray and the updater.
+      - name: Build
+        run: go build -tags desktop,production -ldflags "-H windowsgui" -o build/bin/Presentia-ci.exe .
+
+      - name: Go tests (update checks)
+        run: go test -tags desktop,production -count=1 .
+
+  website:
+    name: Registration website
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Syntax check
+        run: |
+          node --check src/worker.js
+          for f in public/*.js; do node --check "$f"; done
+
+      # Bundles the Worker exactly as a deploy would, without uploading
+      # anything (no Cloudflare account needed).
+      - name: Deploy dry run
+        run: |
+          npm run assets
+          npx wrangler deploy --dry-run --outdir .wrangler-dry-run
+
+  deploy-website:
+    name: Deploy the registration website
+    needs: [sidecar, frontend, desktop, website]
+    # Only from main, only after every check above passed: on a push, or when
+    # started by hand with "deploy website" ticked. Never from the Release run.
+    if: >-
+      github.ref == 'refs/heads/main' && (
+        (github.event_name == 'push' && github.workflow == 'CI') ||
+        (github.event_name == 'workflow_dispatch' && github.workflow == 'CI' && inputs.deploy_website)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: deploy-website
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: decide
+        name: Did the website change?
+        env:
+          BEFORE: ${{ github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::notice::Website not deployed: add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets (see web/README.md)."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git diff --quiet "$BEFORE" "$GITHUB_SHA" -- web/; then
+            echo "No changes in web/ - nothing to deploy."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v7
+        if: steps.decide.outputs.deploy == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Deploy
+        if: steps.decide.outputs.deploy == 'true'
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run assets
+          npx wrangler deploy
+          echo "Website deployed: $(curl -s https://presentia.venki050524.workers.dev/api/health)" >> "$GITHUB_STEP_SUMMARY"

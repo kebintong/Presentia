@@ -5,6 +5,7 @@ import PerformanceSettings from './PerformanceSettings'
 import AccessibilitySettings from './AccessibilitySettings'
 import DiagnosticsSettings from './DiagnosticsSettings'
 import DataSettings from './DataSettings'
+import ReleaseNotes from './ReleaseNotes'
 
 export interface UpdateInfo {
   available: boolean
@@ -16,7 +17,7 @@ export interface UpdateInfo {
 }
 
 type Phase = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
-type Tab = 'appearance' | 'performance' | 'accessibility' | 'updates' | 'data' | 'diagnostics'
+export type Tab = 'appearance' | 'performance' | 'accessibility' | 'updates' | 'data' | 'diagnostics'
 
 const TAB_KEY = 'presentia.settingsTab'
 const TABS: { id: Tab; label: string }[] = [
@@ -48,13 +49,15 @@ interface SettingsPanelProps {
   animations: boolean
   onToggleAnimations: () => void
   onRecheck: () => Promise<UpdateInfo | null>
+  /** Open on this tab (e.g. Updates, from the "update available" notice). */
+  focusTab?: Tab | null
 }
 
 const goApp = () => (window as any)['go']?.['main']?.['App']
 
 export default function SettingsPanel({
   open, onClose, update, version, theme, onToggleTheme,
-  iridescent, onToggleIridescent, animations, onToggleAnimations, onRecheck,
+  iridescent, onToggleIridescent, animations, onToggleAnimations, onRecheck, focusTab,
 }: SettingsPanelProps) {
   const [phase, setPhase]         = useState<Phase>('idle')
   const [progress, setProgress]   = useState(0)
@@ -66,6 +69,10 @@ export default function SettingsPanel({
     setTab(t)
     try { localStorage.setItem(TAB_KEY, t) } catch { /* ignore */ }
   }
+
+  useEffect(() => {
+    if (open && focusTab) setTab(focusTab)
+  }, [open, focusTab])
 
   // Download progress is pushed from Go rather than polled.
   useEffect(() => {
@@ -117,10 +124,6 @@ export default function SettingsPanel({
       setMessage(String(err?.message || err || 'Could not start the installer.'))
     }
   }
-
-  // Release notes can be long markdown; show the first few lines.
-  const notes = (update?.notes || '')
-    .split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 6)
 
   return (
     <div className="modal-scrim" onClick={onClose}>
@@ -258,12 +261,10 @@ export default function SettingsPanel({
             )}
           </div>
 
-          {update?.available && notes.length > 0 && (
-            <ul className="settings-notes">
-              {notes.map((line, i) => (
-                <li key={i}>{line.replace(/^[-*]\s*/, '')}</li>
-              ))}
-            </ul>
+          {update?.available && (
+            <div className="settings-notes">
+              <ReleaseNotes body={update.notes} empty="No details were given for this version." />
+            </div>
           )}
 
           {update?.available && (

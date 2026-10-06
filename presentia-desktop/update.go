@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -45,15 +46,15 @@ const GitHubRepo = "kebintong/Presentia"
 
 // How long to wait before asking GitHub again.
 //
-// GitHub's unauthenticated API allows 60 requests per hour per IP address. A
-// whole computer lab shares one public IP, so an unthrottled check on every
-// launch would rate-limit the entire school. Once a day per machine keeps a
-// lab of any size far below the limit.
+// Each check first asks github.com/<repo>/releases/latest, which only answers
+// with a redirect to the newest release's tag. That is an ordinary web page,
+// not the REST API, so it does not use up the API's limit of 60 requests per
+// hour per IP address (a whole computer lab shares one IP). The API is asked
+// for the release notes only when that tag is new — once per release.
 //
-// If you ever do hit the limit, point manifestURL at a plain JSON file
-// instead (raw.githubusercontent.com has no API rate limit) — the only thing
-// that has to change is parseRelease.
-const updateCheckInterval = 24 * time.Hour
+// The app checks at start-up and then about every hour while it runs (see
+// App.tsx); this interval keeps that to one real request every few hours.
+const updateCheckInterval = 4 * time.Hour
 
 // UpdateInfo is what the frontend receives.
 type UpdateInfo struct {
@@ -97,20 +98,37 @@ func (a *App) CheckForUpdate(force bool) (UpdateInfo, error) {
 	}
 
 	cachePath := updateCachePath()
+	cached, haveCache := readUpdateCache(cachePath)
 
 	// Serve the cached answer unless the throttle window has passed.
-	if !force {
-		if cached, ok := readUpdateCache(cachePath); ok {
-			cached.Current = AppVersion
-			// Re-evaluate against the current build: an upgraded app must
-			// stop showing a banner for a version it now IS.
-			cached.Available = cached.Latest != "" && versionLess(AppVersion, cached.Latest)
-			return cached, nil
-		}
+	if !force && haveCache && cacheFresh(cached) {
+		return reevaluate(cached), nil
+	}
+
+	// Cheap check: which tag is the newest release? Same as last time means
+	// the cached notes and download link are still right.
+	tag, tagErr := latestReleaseTag()
+	if tagErr == nil && haveCache && cached.Latest != "" &&
+		strings.TrimPrefix(tag, "v") == cached.Latest {
+		cached.CheckedAt = time.Now().Format(time.RFC3339)
+		writeUpdateCache(cachePath, cached)
+		return reevaluate(cached), nil
 	}
 
 	rel, err := fetchLatestRelease()
 	if err != nil {
+		if tagErr == nil && tag != "" {
+			// The API is unavailable (most likely rate-limited) but the tag is
+			// known: still offer the update, with the installer's usual link.
+			info.Latest = strings.TrimPrefix(tag, "v")
+			info.URL = fmt.Sprintf("https://github.com/%s/releases/download/%s/PresentiaSetup.exe", GitHubRepo, tag)
+			info.CheckedAt = time.Now().Format(time.RFC3339)
+			info.Available = versionLess(AppVersion, info.Latest)
+			if a.ctx != nil {
+				wailsruntime.LogInfo(a.ctx, "Release notes unavailable: "+err.Error())
+			}
+			return info, nil // not cached: the next check fetches the notes
+		}
 		// Offline, rate-limited, or GitHub is down — report no update and let
 		// the next check try again.
 		if a.ctx != nil {
@@ -135,6 +153,14 @@ func (a *App) CheckForUpdate(force bool) (UpdateInfo, error) {
 	info.Available = info.Latest != "" && versionLess(AppVersion, info.Latest)
 	writeUpdateCache(cachePath, info)
 	return info, nil
+}
+
+// reevaluate compares a stored answer with the running build: an upgraded app
+// must stop showing a notice for a version it now IS.
+func reevaluate(cached UpdateInfo) UpdateInfo {
+	cached.Current = AppVersion
+	cached.Available = cached.Latest != "" && versionLess(AppVersion, cached.Latest)
+	return cached
 }
 
 // OpenDownloadPage opens a release or installer URL in the user's browser.
@@ -296,6 +322,52 @@ func (a *App) InstallUpdate(installerPath string) error {
 
 // ── internals ────────────────────────────────────────────────────────────────
 
+// latestReleaseTag reads the newest published release's tag ("v1.5.4") from
+// the redirect github.com/<repo>/releases/latest answers with. Drafts and
+// pre-releases are never "latest". This is not the rate-limited REST API.
+func latestReleaseTag() (string, error) {
+	url := fmt.Sprintf("https://github.com/%s/releases/latest", GitHubRepo)
+	req, err := http.NewRequest(http.MethodHead, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Presentia-Updater/"+AppVersion)
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse // read the redirect, don't follow it
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	return tagFromLocation(resp.StatusCode, resp.Header.Get("Location"))
+}
+
+var releaseTag = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){1,2}$`)
+
+// tagFromLocation extracts the tag from ".../releases/tag/<tag>".
+func tagFromLocation(status int, location string) (string, error) {
+	if status < 300 || status >= 400 || location == "" {
+		return "", fmt.Errorf("no release redirect (HTTP %d)", status)
+	}
+	const marker = "/releases/tag/"
+	i := strings.Index(location, marker)
+	if i < 0 {
+		return "", fmt.Errorf("no published release yet")
+	}
+	tag := location[i+len(marker):]
+	if j := strings.IndexAny(tag, "?#/"); j >= 0 {
+		tag = tag[:j]
+	}
+	if !releaseTag.MatchString(tag) {
+		return "", fmt.Errorf("unexpected release tag %q", tag)
+	}
+	return tag, nil
+}
+
 func fetchLatestRelease() (*ghRelease, error) {
 	manifestURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", GitHubRepo)
 
@@ -338,7 +410,7 @@ func updateCachePath() string {
 	return filepath.Join(dir, "update-check.json")
 }
 
-// readUpdateCache returns the stored result when it is still fresh.
+// readUpdateCache returns the stored result, however old.
 func readUpdateCache(path string) (UpdateInfo, bool) {
 	var info UpdateInfo
 	data, err := os.ReadFile(path)
@@ -348,11 +420,18 @@ func readUpdateCache(path string) (UpdateInfo, bool) {
 	if err := json.Unmarshal(data, &info); err != nil {
 		return info, false
 	}
-	checked, err := time.Parse(time.RFC3339, info.CheckedAt)
-	if err != nil || time.Since(checked) > updateCheckInterval {
-		return info, false
-	}
 	return info, true
+}
+
+// cacheFresh: checked within updateCheckInterval (and not in the future,
+// which a changed clock could cause).
+func cacheFresh(info UpdateInfo) bool {
+	checked, err := time.Parse(time.RFC3339, info.CheckedAt)
+	if err != nil {
+		return false
+	}
+	age := time.Since(checked)
+	return age >= 0 && age <= updateCheckInterval
 }
 
 func writeUpdateCache(path string, info UpdateInfo) {

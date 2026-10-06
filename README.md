@@ -41,7 +41,7 @@ Students can register in person with the teacher's webcam, or from their own pho
 3. On first launch Presentia checks the hardware and downloads its face models (about 180 MB, once).
    The status pill in the top bar shows the progress.
 
-Presentia **updates itself**: when a new release is published, Settings → Updates offers to download and install it.
+Presentia **keeps itself up to date**: it checks for new releases when it starts and every few hours while it runs, shows a notice when one is out (never while a meeting is being monitored), and installs it when you choose *Restart and install* in Settings → Updates.
 
 ---
 
@@ -106,7 +106,7 @@ face data, and nobody can be in the same class twice.
   turn them off; theme changes animate too).
 - **Performance**: device (CPU or GPU via DirectML) and profile (Auto / Low / Balanced / High), with a benchmark.
 - **Accessibility**: randomised challenges, photo / screen replay detection.
-- **Updates**: check, download and install new releases.
+- **Updates**: what's new in the latest release, then download and install it (checked automatically).
 - **Data**: what's stored on this computer, and **Delete all data**.
 - **Diagnostics**: a step-by-step connection check for the registration website, recent problems, and an optional
   **diagnostic mode** that keeps an activity log and offers to send, copy or save a report when something fails

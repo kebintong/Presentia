@@ -1237,7 +1237,9 @@ select.input option {
 
 .settings-notes {
   margin: 0;
-  padding: 10px 14px 10px 30px;
+  padding: 12px 16px;
+  max-height: 280px;
+  overflow: auto;
   border-radius: var(--radius-md);
   background: var(--card-row-bg);
   border: 1px solid var(--card-row-border);
@@ -1245,6 +1247,37 @@ select.input option {
   color: var(--muted);
   line-height: 1.6;
 }
+
+/* Release notes (ReleaseNotes.tsx): GitHub's Markdown, shown as text. */
+.release-notes { display: flex; flex-direction: column; gap: 8px; }
+.release-notes p, .release-notes ul { margin: 0; }
+.release-notes ul { padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.release-notes strong { color: var(--ink-heading); font-weight: 650; }
+.release-notes code {
+  font-size: 11.5px; padding: 1px 5px; border-radius: 5px;
+  background: var(--surface); border: 1px solid var(--card-row-border);
+}
+.release-notes-heading { color: var(--ink-heading); font-weight: 700; font-size: 13px; margin-top: 2px; }
+.release-notes-empty { margin: 0; }
+
+/* "Update available" notice in the corner (UpdateNotice.tsx). */
+.update-notice {
+  position: fixed; right: 16px; bottom: 16px; z-index: 280;
+  width: min(360px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-lg, 14px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  animation: rise var(--dur) var(--ease-out) backwards;
+}
+.update-notice-title { font-size: 13px; font-weight: 700; color: var(--ink-heading); }
+.update-notice-text { font-size: 12px; color: var(--muted); margin-top: 2px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.update-notice-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.update-notice-actions .btn-ghost, .update-notice-actions .btn-primary { padding: 6px 12px; font-size: 12px; }
 
 .settings-update-actions {
   display: flex;
