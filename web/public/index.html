@@ -5,51 +5,86 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Presentia — Join your class</title>
   <meta name="description" content="Register for your class's Presentia attendance with your join code.">
-  <meta name="theme-color" content="#0F1729" media="(prefers-color-scheme: dark)">
-  <meta name="theme-color" content="#F5F7FA" media="(prefers-color-scheme: light)">
-  <link rel="icon" type="image/png" href="/favicon.png">
-  <link rel="apple-touch-icon" href="/img/icon-192.png">
+  <meta name="theme-color" content="#F6F8FB">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/img/icon-180.png">
+  <link rel="preload" href="/fonts/poppins-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/manrope-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
-<body>
+<body data-step="code">
+  <div class="deco" aria-hidden="true">
+    <span class="deco-ring"></span>
+    <span class="deco-block"></span>
+    <svg class="deco-squiggle" viewBox="0 0 120 40"><path d="M4 28c12-20 22-20 30 0s20 20 30 0 20-20 30 0 16 14 22 4"/></svg>
+  </div>
+
   <header class="site-header">
     <a class="brand" href="/" aria-label="Presentia home">
-      <picture>
-        <source srcset="/img/mark-dark.png" media="(prefers-color-scheme: dark)">
-        <img src="/img/mark-light.png" alt="" width="17" height="26">
-      </picture>
+      <img src="/favicon.svg" alt="" width="34" height="34">
       <span>Presentia</span>
     </a>
     <span class="header-tag">Class registration</span>
+    <nav class="site-nav" aria-label="Main">
+      <a href="#how">How it works</a>
+      <a href="/privacy.html">Privacy</a>
+      <a class="btn btn-ghost btn-small" href="https://github.com/kebintong/Presentia/releases/latest">For teachers: get the app</a>
+    </nav>
   </header>
 
   <main id="app">
+    <!-- Wide screens: the welcome and the four steps sit beside the card. -->
+    <section class="hero" id="how" aria-label="How it works">
+      <p class="hero-title">Hi! Let’s get you into <span class="hl">class.</span></p>
+      <p class="hero-lead">Register once with your join code and a quick face check. Your teacher’s Presentia app
+        then marks you present in online classes.</p>
+      <ol class="journey" aria-label="Registration steps">
+        <li data-for="code"><span class="journey-num">1</span>Enter your join code</li>
+        <li data-for="details"><span class="journey-num">2</span>Add your student ID</li>
+        <li data-for="camera"><span class="journey-num">3</span>20-second face check</li>
+        <li data-for="review"><span class="journey-num">4</span>Submit — done</li>
+      </ol>
+    </section>
+
     <ol class="progress" aria-label="Registration steps">
-      <li data-for="code">Join code</li>
-      <li data-for="details">Your details</li>
-      <li data-for="camera">Face check</li>
-      <li data-for="review">Submit</li>
+      <li data-for="code"><span class="step-num">1</span><span class="step-label">Join code</span></li>
+      <li data-for="details"><span class="step-num">2</span><span class="step-label">Your details</span></li>
+      <li data-for="camera"><span class="step-num">3</span><span class="step-label">Face check</span></li>
+      <li data-for="review"><span class="step-num">4</span><span class="step-label">Submit</span></li>
     </ol>
 
     <!-- 1. Join code -->
     <section class="step" data-step="code">
-      <h1>Join your class</h1>
+      <span class="step-pill">Step 1 of 4</span>
+      <h1>Hi! Let’s get you into <span class="hl">class.</span></h1>
       <p class="lead">Enter the join code your teacher gave you. It looks like <span class="mono">K7M-Q2P</span>.</p>
       <form id="code-form" novalidate>
-        <label class="field-label" for="code">Join code</label>
-        <input id="code" class="input code-input" name="code" autocomplete="off" autocapitalize="characters"
-               spellcheck="false" inputmode="text" maxlength="7" placeholder="ABC-123" required>
+        <label class="field-label" for="code">Your join code</label>
+        <div class="code-field" id="code-field">
+          <div class="code-boxes" aria-hidden="true">
+            <span></span><span></span><span></span><i class="code-dash"></i><span></span><span></span><span></span>
+          </div>
+          <input id="code" class="code-input" name="code" autocomplete="off" autocapitalize="characters"
+                 spellcheck="false" inputmode="text" maxlength="7" placeholder="ABC-123" required>
+        </div>
+        <details class="hint" id="code-hint">
+          <summary>Where’s my code?</summary>
+          <p>It’s on your teacher’s Presentia screen, or in your class group chat. Ask your teacher if you can’t find it.</p>
+        </details>
         <p class="error" id="code-error" role="alert" hidden></p>
-        <button class="btn btn-primary btn-block" type="submit" id="code-submit">Continue</button>
+        <button class="btn btn-primary btn-block" type="submit" id="code-submit">Let’s go</button>
+        <p class="code-foot">On a computer? Your webcam works too. <a href="/privacy.html">Privacy notice</a></p>
       </form>
     </section>
 
     <!-- 2. Details + consent -->
     <section class="step" data-step="details" hidden>
+      <span class="step-pill">Step 2 of 4</span>
       <div class="class-banner">
         <div>
-          <span class="class-banner-label">You're joining</span>
+          <span class="class-banner-label">You’re joining</span>
           <strong id="class-name"></strong>
           <span id="class-section" class="class-banner-section"></span>
         </div>
@@ -67,9 +102,9 @@
         <div class="consent">
           <input type="checkbox" id="consent" required>
           <label for="consent">
-            I agree that Presentia may take three photos of my face so my teacher's attendance app
+            I agree that Presentia may take three photos of my face so my teacher’s attendance app
             can recognise me in class. The photos are deleted from this website as soon as my
-            teacher's app collects them, and after 14 days at the latest.
+            teacher’s app collects them, and after 14 days at the latest.
             <a href="/privacy.html" target="_blank" rel="noopener">Read the privacy notice</a>.
           </label>
         </div>
@@ -83,9 +118,10 @@
 
     <!-- 3. Live face check -->
     <section class="step" data-step="camera" hidden>
-      <h1>Face check</h1>
+      <span class="step-pill">Step 3 of 4</span>
+      <h1>Quick face check</h1>
       <p class="lead" id="camera-lead">Follow the prompts on screen. It takes about 20 seconds and shows
-        your teacher that it's really you, live.</p>
+        your teacher that it’s really you, live.</p>
 
       <div class="stage" id="stage">
         <video id="video" playsinline muted autoplay></video>
@@ -100,7 +136,7 @@
           <ellipse cx="150" cy="190" rx="105" ry="140" class="oval-ring" id="oval-ring"/>
         </svg>
         <div class="stage-idle" id="stage-idle">
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9a2 2 0 0 1 2-2h.93a2 2 0 0 0 1.66-.89l.82-1.22A2 2 0 0 1 10.07 4h3.86a2 2 0 0 1 1.66.89l.82 1.22A2 2 0 0 0 18.07 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3"/></svg>
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9a2 2 0 0 1 2-2h.93a2 2 0 0 0 1.66-.89l.82-1.22A2 2 0 0 1 10.07 4h3.86a2 2 0 0 1 1.66.89l.82 1.22A2 2 0 0 0 18.07 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3"/></svg>
           <span>Your camera will appear here</span>
         </div>
         <div class="prompt" id="prompt" aria-live="assertive"></div>
@@ -114,7 +150,7 @@
       <ul class="tips" id="tips">
         <li>Face a window or a lamp so your face is well lit.</li>
         <li>Take off caps, sunglasses and face masks.</li>
-        <li>Hold your phone at eye level, about an arm's length away.</li>
+        <li>Hold your phone at eye level, about an arm’s length away.</li>
       </ul>
       <p class="error" id="camera-error" role="alert" hidden></p>
       <div class="actions">
@@ -125,6 +161,7 @@
 
     <!-- 4. Review + submit -->
     <section class="step" data-step="review" hidden>
+      <span class="step-pill">Step 4 of 4</span>
       <h1>Check and submit</h1>
       <div class="shots" id="shots"></div>
       <dl class="summary">
@@ -133,7 +170,7 @@
         <dt>Name</dt><dd id="sum-name"></dd>
       </dl>
       <p class="error" id="submit-error" role="alert" hidden></p>
-      <div class="actions">
+      <div class="actions actions-wrap">
         <button class="btn btn-ghost" type="button" id="change-no" hidden>Change student ID</button>
         <button class="btn btn-ghost" type="button" id="retake">Retake photos</button>
         <button class="btn btn-primary" type="button" id="submit">Submit registration</button>
@@ -142,19 +179,22 @@
 
     <!-- 5. Done -->
     <section class="step done" data-step="done" hidden>
-      <div class="done-icon" aria-hidden="true">
-        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      <div class="confetti" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
       </div>
-      <h1>You're registered</h1>
+      <div class="done-icon" aria-hidden="true">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path class="done-check" d="M20 6 9 17l-5-5"/></svg>
+      </div>
+      <h1>You’re <span class="hl">registered!</span></h1>
       <p class="lead" id="done-text"></p>
-      <p class="muted">You can close this page. If your details were wrong, register again with the same
-        student ID before your teacher accepts it — the new one replaces the old.</p>
+      <p class="muted">You can close this page. If your details were wrong, register again with the same student ID before
+        your teacher accepts it — the new one replaces the old.</p>
     </section>
   </main>
 
   <footer class="site-footer">
     <a href="/privacy.html">Privacy notice</a>
-    <span>Photos are deleted after your teacher's app collects them, or after 14 days.</span>
+    <span>Photos are deleted after your teacher’s app collects them, or after 14 days.</span>
   </footer>
   <noscript><p class="noscript">This page needs JavaScript to use your camera.</p></noscript>
 </body>

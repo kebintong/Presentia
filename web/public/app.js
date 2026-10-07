@@ -42,9 +42,10 @@ const TEST = (location.hostname === 'localhost' || location.hostname === '127.0.
 // ── navigation ────────────────────────────────────────────────────────────
 
 function show(step) {
+  document.body.dataset.step = step // lets the page pause its background motion on the camera step
   for (const s of document.querySelectorAll('.step')) s.hidden = s.dataset.step !== step
   const idx = STEPS.indexOf(step)
-  for (const li of document.querySelectorAll('.progress li')) {
+  for (const li of document.querySelectorAll('.progress li, .journey li')) {
     const i = STEPS.indexOf(li.dataset.for)
     li.classList.toggle('current', i === idx)
     li.classList.toggle('done', i < idx)
@@ -65,6 +66,13 @@ function setError(id, message) {
   const el = $(id)
   el.textContent = message || ''
   el.hidden = !message
+  if (message && id === 'code-error') shake($('code-field'))
+}
+
+function shake(el) {
+  el.classList.remove('shake')
+  void el.offsetWidth // restart the animation
+  el.classList.add('shake')
 }
 
 async function api(path, options = {}) {
@@ -96,10 +104,39 @@ const formatCode = (raw) => {
 codeInput.addEventListener('input', () => {
   codeInput.value = formatCode(codeInput.value)
   setError('code-error', '')
+  paintCode()
+})
+
+// The six boxes are only a picture of the one real input above them.
+const codeBoxes = [...document.querySelectorAll('#code-field .code-boxes span')]
+function paintCode() {
+  const chars = codeInput.value.replace('-', '')
+  const focused = document.activeElement === codeInput
+  codeBoxes.forEach((box, i) => {
+    const ch = chars[i] || ''
+    if (box.textContent !== ch) {
+      box.textContent = ch
+      box.classList.remove('pop')
+      if (ch) {
+        void box.offsetWidth
+        box.classList.add('pop')
+      }
+    }
+    box.classList.toggle('filled', !!ch)
+    box.classList.toggle('active', focused && i === Math.min(chars.length, codeBoxes.length - 1) && chars.length < 6)
+  })
+}
+codeInput.addEventListener('focus', paintCode)
+codeInput.addEventListener('blur', paintCode)
+// Keep the (invisible) caret at the end, where the next box is.
+codeInput.addEventListener('click', () => {
+  const end = codeInput.value.length
+  codeInput.setSelectionRange(end, end)
 })
 
 async function lookUp(code) {
   const btn = $('code-submit')
+  const label = btn.textContent
   btn.disabled = true
   btn.textContent = 'Checking…'
   try {
@@ -113,7 +150,7 @@ async function lookUp(code) {
     setError('code-error', err.message)
   } finally {
     btn.disabled = false
-    btn.textContent = 'Continue'
+    btn.textContent = label
   }
 }
 
@@ -378,9 +415,13 @@ $('submit').addEventListener('click', async () => {
 
 // ── start ─────────────────────────────────────────────────────────────────
 
+// On a computer there is room to show the "Where's my code?" tip straight away.
+if (matchMedia('(min-width: 960px)').matches) $('code-hint').open = true
+
 const fromLink = new URLSearchParams(location.search).get('code')
 show('code')
 if (fromLink) {
   codeInput.value = formatCode(fromLink)
+  paintCode()
   if (codeInput.value.replace('-', '').length === 6) lookUp(codeInput.value.replace('-', ''))
 }
