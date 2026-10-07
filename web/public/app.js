@@ -166,12 +166,25 @@ $('code-form').addEventListener('submit', (e) => {
 
 // ── 2. details ────────────────────────────────────────────────────────────
 
+// Student IDs are numbers, sometimes split with - . / or a space (2024-00123).
+const STUDENT_NO_RE = /^[0-9][0-9 ._\-\/]{0,31}$/
+$('student-no').addEventListener('input', (e) => {
+  const el = e.target
+  const clean = el.value.replace(/[^0-9 ._\-\/]/g, '')
+  if (clean !== el.value) {
+    const at = el.selectionStart - (el.value.length - clean.length)
+    el.value = clean
+    el.setSelectionRange(Math.max(0, at), Math.max(0, at))
+    setError('details-error', 'Student ID numbers have no letters, only numbers and - . /')
+  }
+})
+
 $('details-form').addEventListener('submit', (e) => {
   e.preventDefault()
   const no = $('student-no').value.trim()
   const name = $('full-name').value.replace(/\s+/g, ' ').trim()
-  if (!/^[A-Za-z0-9][A-Za-z0-9 ._\-\/]{0,31}$/.test(no)) {
-    setError('details-error', 'Enter your student ID number (letters, numbers and - . / only).')
+  if (!STUDENT_NO_RE.test(no)) {
+    setError('details-error', 'Enter your student ID number: numbers, with - . / if your school uses them. No letters.')
     return
   }
   if (name.length < 2) {
@@ -307,7 +320,7 @@ async function startCheck() {
       const now = performance.now()
       if (video.readyState >= 2) {
         const faces = tracker.detect(video)
-        const view = challenge.update(faces, now)
+        const view = challenge.update(faces, now, (video.videoWidth || 4) / (video.videoHeight || 3))
         if (view.wantPhoto && faces.length === 1) {
           state.photos.push(takePhoto(video, faces[0], canvas))
         }

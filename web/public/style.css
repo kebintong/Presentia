@@ -522,7 +522,7 @@ a.btn-ghost, a.btn-ghost:hover { color: var(--ink); }
   width: 26px;
   height: 26px;
   margin: 0;
-  border: var(--bw) solid var(--edge);
+  border: var(--bw) solid var(--field-edge);
   border-radius: calc(8px * var(--rs));
   background: var(--field-bg);
   cursor: pointer;

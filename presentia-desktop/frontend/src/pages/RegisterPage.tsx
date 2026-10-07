@@ -502,7 +502,7 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
                 className={`input ${fieldErrors.studentNo ? 'input-error' : ''}`}
                 placeholder="e.g. 2024-00123"
                 value={studentNo}
-                onChange={(e) => { setStudentNo(e.target.value); if (fieldErrors.studentNo) setFieldErrors(p => ({ ...p, studentNo: false })) }}
+                onChange={(e) => { setStudentNo(e.target.value.replace(/[^0-9 ._\-\/]/g, '')); if (fieldErrors.studentNo) setFieldErrors(p => ({ ...p, studentNo: false })) }}
               />
             </div>
 

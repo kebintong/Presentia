@@ -271,3 +271,8 @@ html[data-theme="iri"] .brand-tile::after { background: #1B1030; }
   .theme-btn { min-height: 46px; padding: 8px 16px; font-size: 15px; }
   .theme-menu { display: flex; }
 }
+
+/* The consent tick box sits on a lavender panel: give it a white box and a
+   visible edge in Soft Bento, and the brand colour once ticked. */
+html[data-theme="bento"] .consent input { border: 2px solid #A5B4FC; background: #FFFFFF; }
+html[data-theme="bento"] .consent input:checked { border-color: var(--brand); background: var(--brand); }

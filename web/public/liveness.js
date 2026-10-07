@@ -8,7 +8,8 @@
 // Everything runs on the device; only the three photos are uploaded.
 
 const EAR_CLOSED = 0.2   // eye aspect ratio below this counts as closed
-const EAR_OPEN = 0.25    // must recover above this to finish a blink
+const EAR_OPEN = 0.23    // must recover above this to finish a blink
+const EYES_OPEN = 0.21   // "looking at the camera" only needs eyes not mid-blink
 const BLINK_WINDOW = 4000 // ms: both blinks must happen this close together
 const YAW_LOW = 0.36     // nose position between the cheeks: turned one way …
 const YAW_HIGH = 0.64    // … or the other
@@ -34,14 +35,19 @@ export const PROMPTS = {
   center_final: 'Look straight at the camera again',
 }
 
-function dist(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y)
+// Landmarks are normalised to the frame's width and height separately, so a
+// distance has to put x and y back on the same scale before eye shapes can be
+// compared. Without this a portrait phone camera (taller than wide) squashes
+// every eye: open eyes read as half-closed and "Look straight at the camera"
+// never finishes. `aspect` is the video's width / height.
+function dist(a, b, aspect) {
+  return Math.hypot((a.x - b.x) * aspect, a.y - b.y)
 }
 
-function ear(lm, idx) {
+function ear(lm, idx, aspect) {
   const p = idx.map((i) => lm[i])
-  const h = dist(p[0], p[3])
-  return h === 0 ? 1 : (dist(p[1], p[5]) + dist(p[2], p[4])) / (2 * h)
+  const h = dist(p[0], p[3], aspect)
+  return h === 0 ? 1 : (dist(p[1], p[5], aspect) + dist(p[2], p[4], aspect)) / (2 * h)
 }
 
 function yaw(lm) {
@@ -124,8 +130,8 @@ export class Challenge {
 
   get stage() { return this.steps[this.i] }
 
-  /** One frame. Returns {prompt, hint, ok, wantPhoto}. */
-  update(faces, now) {
+  /** One frame. Returns {prompt, hint, ok, wantPhoto}. `aspect` = video width / height. */
+  update(faces, now, aspect = 4 / 3) {
     if (this.result) return { prompt: this.reason, hint: '', ok: this.result === 'passed', wantPhoto: false }
     if (this.started === null) this.started = now
     if (this.stepStarted === null) this.stepStarted = now
@@ -141,12 +147,12 @@ export class Challenge {
     const box = faceBox(lm)
     const y = yaw(lm)
     const centred = y > CENTER_LO && y < CENTER_HI
-    const e = Math.min(ear(lm, LEFT_EYE), ear(lm, RIGHT_EYE))
+    const e = Math.min(ear(lm, LEFT_EYE, aspect), ear(lm, RIGHT_EYE, aspect))
 
     switch (this.stage) {
       case 'center':
         if (box.x2 - box.x1 < MIN_FACE) return this._show('Move a little closer')
-        if (this._held(centred && e > EAR_OPEN, now)) {
+        if (this._held(centred && e > EYES_OPEN, now)) {
           this._next(now)
           return { ...this._view(), wantPhoto: this._photo(now) }
         }
@@ -175,7 +181,7 @@ export class Challenge {
       }
       case 'center_final':
         if (box.x2 - box.x1 < MIN_FACE) return this._show('Move a little closer')
-        if (centred && e > EAR_OPEN && this.photosTaken < 3 && now - this.lastPhotoAt >= PHOTO_GAP) {
+        if (centred && e > EYES_OPEN && this.photosTaken < 3 && now - this.lastPhotoAt >= PHOTO_GAP) {
           const want = this._held(true, now)
           if (want) {
             const shot = this._photo(now)
@@ -185,7 +191,7 @@ export class Challenge {
             }
             return { ...this._view(), wantPhoto: shot }
           }
-        } else if (!centred || e <= EAR_OPEN) {
+        } else if (!centred || e <= EYES_OPEN) {
           this.holdSince = null
         }
         break

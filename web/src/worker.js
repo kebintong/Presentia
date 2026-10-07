@@ -28,7 +28,8 @@ const REPORT_MAX = 200_000          // characters per diagnostic report
 const ISSUES_PER_DAY = 50           // GitHub issues opened from reports, all senders together
 
 const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/
-const STUDENT_NO_RE = /^[A-Za-z0-9][A-Za-z0-9 ._\-\/]{0,31}$/
+// Numbers, optionally split with space . _ - / (e.g. 2024-00123). No letters.
+const STUDENT_NO_RE = /^[0-9][0-9 ._\-\/]{0,31}$/
 const MAX_BODY = 1_500_000          // bytes, whole registration request
 const MAX_PHOTO = 350_000           // bytes per decoded JPEG
 const MAX_PHOTOS = 3
@@ -199,7 +200,7 @@ async function submitRegistration(env, request) {
 
   if (!CODE_RE.test(code)) return fail(400, 'bad_code', 'The join code is not valid.')
   if (!STUDENT_NO_RE.test(studentNo)) {
-    return fail(400, 'bad_student_no', 'Enter your student ID number (letters, numbers and - . / only).')
+    return fail(400, 'bad_student_no', 'Enter your student ID number: numbers, with - . / if your school uses them. No letters.')
   }
   if (name.length < 2 || name.length > 80) return fail(400, 'bad_name', 'Enter your full name.')
   if (body.consent !== true) {
