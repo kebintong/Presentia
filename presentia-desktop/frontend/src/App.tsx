@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect } from 'react'
 import TopBar from './components/TopBar'
 import { switchTheme } from './themeTransition'
+import { ThemeKey, loadTheme, saveTheme, themeInfo } from './themes'
 import Sidebar from './components/Sidebar'
 import SettingsPanel, { UpdateInfo, Tab as SettingsTab } from './components/SettingsPanel'
 import UpdateNotice from './components/UpdateNotice'
@@ -13,9 +14,9 @@ import ClassPickerPage from './pages/ClassPickerPage'
 import StudentsPage from './pages/StudentsPage'
 import { ClassInfo } from './classes'
 import './style.css'
+import './themes.css'
 
 type Page = 'register' | 'students' | 'meet' | 'session' | 'reports'
-type Theme = 'dark' | 'light'
 
 const API = 'http://127.0.0.1:7788'
 
@@ -46,43 +47,28 @@ export default function App() {
   const [engineReady, setEngineReady] = useState(false)
   // What first launch is doing (hardware check, model download progress).
   const [engineMessage, setEngineMessage] = useState('')
-  const [theme, setTheme] = useState<Theme>(() => {
-    const saved = localStorage.getItem('presentia-theme')
-    if (saved === 'dark' || saved === 'light') return saved
-    return 'dark' // default dark mode
-  })
+  // One of the six looks in Settings → Appearance (see themes.ts).
+  const [themeKey, setThemeKey] = useState<ThemeKey>(loadTheme)
+  const info = themeInfo(themeKey)
 
-  // Experimental iridescent design. It is a dark-only look: while it is on
-  // the app is forced dark, and the user's own theme choice is kept so that
-  // turning it off puts them back where they were.
-  const [iridescent, setIridescent] = useState<boolean>(
-    () => localStorage.getItem('presentia-iridescent') === '1'
-  )
-  const effectiveTheme: Theme = iridescent ? 'dark' : theme
-
-  // Sync theme with DOM and localStorage. A layout effect, so the attribute
-  // is set during the commit (the animated theme switch snapshots right after).
-  useLayoutEffect(() => {
-    document.documentElement.setAttribute('data-theme', effectiveTheme)
-    localStorage.setItem('presentia-theme', theme)
-    // The floating bubble is a native Win32 window, so it cannot read the
-    // stylesheet — push the theme down to it explicitly.
-    goApp()?.['SetBubbleTheme']?.(effectiveTheme === 'dark')
-  }, [theme, effectiveTheme])
-
-  const toggleTheme = () => {
-    if (iridescent) return // locked to dark
-    switchTheme(() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark')))
-  }
-
+  // Sync theme with DOM and localStorage. A layout effect, so the attributes
+  // are set during the commit (the animated theme switch snapshots right after).
   useLayoutEffect(() => {
     const root = document.documentElement
-    if (iridescent) root.setAttribute('data-style', 'iridescent')
+    root.setAttribute('data-theme', info.mode)
+    if (info.style) root.setAttribute('data-style', info.style)
     else root.removeAttribute('data-style')
-    localStorage.setItem('presentia-iridescent', iridescent ? '1' : '0')
-    // Swaps the native bubble between the cyan mark and the spectrum mark.
-    goApp()?.['SetBubbleStyle']?.(iridescent)
-  }, [iridescent])
+    saveTheme(themeKey)
+    // The floating bubble is a native Win32 window, so it cannot read the
+    // stylesheet — push the mode and the spectrum mark down to it explicitly.
+    goApp()?.['SetBubbleTheme']?.(info.mode === 'dark')
+    goApp()?.['SetBubbleStyle']?.(themeKey === 'iri')
+  }, [themeKey, info])
+
+  const chooseTheme = (key: ThemeKey) => {
+    if (key === themeKey) return
+    switchTheme(() => setThemeKey(key))
+  }
 
   // Interface motion (page, card and dialog animations). Until the user
   // chooses, follow the system's "reduce motion" preference.
@@ -196,22 +182,35 @@ export default function App() {
     <>
       {/* Main App Shell — flat solid surfaces, no ambient background layer */}
       <div className="app-shell">
-        {/* Top Header Bar with Theme Switcher */}
+        {/* Top Header Bar */}
         <TopBar
           activePage={page}
           onNavigate={setPage}
           engineReady={engineReady}
           engineMessage={engineMessage}
-          theme={effectiveTheme}
-          onToggleTheme={toggleTheme}
           version={version}
-          iridescent={iridescent}
           activeClass={activeClass}
           onSwitchClass={switchClass}
         />
 
         {/* App Body: Slim icon sidebar + Main viewport */}
         <div className="app-body">
+          {/* Slow-moving shapes (New Brutalism) or glows (Iridescent) behind the pages; themes.css. */}
+          {themeKey === 'brutal' && (
+            <div className="theme-deco" aria-hidden="true">
+              <span className="deco-ring" />
+              <span className="deco-block" />
+              <span className="deco-dot" />
+              <svg className="deco-squiggle" viewBox="0 0 120 40"><path d="M4 28c12-20 22-20 30 0s20 20 30 0 20-20 30 0 16 14 22 4" /></svg>
+            </div>
+          )}
+          {themeKey === 'iri' && (
+            <div className="theme-deco" aria-hidden="true">
+              <span className="deco-glow glow-1" />
+              <span className="deco-glow glow-2" />
+              <span className="deco-glow glow-3" />
+            </div>
+          )}
           <Sidebar
             active={page}
             onNavigate={setPage}
@@ -233,10 +232,8 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         update={update}
         version={version}
-        theme={effectiveTheme}
-        onToggleTheme={toggleTheme}
-        iridescent={iridescent}
-        onToggleIridescent={() => switchTheme(() => setIridescent((v) => !v))}
+        themeKey={themeKey}
+        onChooseTheme={chooseTheme}
         animations={animations}
         onToggleAnimations={toggleAnimations}
         onRecheck={recheckUpdate}

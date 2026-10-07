@@ -102,6 +102,7 @@ export default function Sidebar({
               <div className="icon-wrapper">
                 {item.icon}
               </div>
+              <span className="sidebar-label">{item.label}</span>
             </button>
           )
         })}

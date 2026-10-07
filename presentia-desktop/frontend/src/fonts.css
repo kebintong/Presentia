@@ -1,0 +1,20 @@
+/* Fonts are bundled with the app (no Google Fonts request), so every theme
+   looks the same offline. Latin subsets from Fontsource, SIL Open Font
+   Licence 1.1 — see assets/fonts/LICENSES.txt. */
+
+@font-face { font-family: 'Poppins'; font-style: normal; font-weight: 400; font-display: swap; src: url('./assets/fonts/poppins-400.woff2') format('woff2'); }
+@font-face { font-family: 'Poppins'; font-style: normal; font-weight: 500; font-display: swap; src: url('./assets/fonts/poppins-500.woff2') format('woff2'); }
+@font-face { font-family: 'Poppins'; font-style: normal; font-weight: 600; font-display: swap; src: url('./assets/fonts/poppins-600.woff2') format('woff2'); }
+@font-face { font-family: 'Poppins'; font-style: normal; font-weight: 700; font-display: swap; src: url('./assets/fonts/poppins-700.woff2') format('woff2'); }
+@font-face { font-family: 'Poppins'; font-style: normal; font-weight: 800; font-display: swap; src: url('./assets/fonts/poppins-800.woff2') format('woff2'); }
+@font-face { font-family: 'Poppins'; font-style: normal; font-weight: 900; font-display: swap; src: url('./assets/fonts/poppins-900.woff2') format('woff2'); }
+
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 200 800; font-display: swap; src: url('./assets/fonts/manrope-var.woff2') format('woff2'); }
+
+/* Soft Bento */
+@font-face { font-family: 'Fredoka'; font-style: normal; font-weight: 300 700; font-display: swap; src: url('./assets/fonts/fredoka-var.woff2') format('woff2'); }
+@font-face { font-family: 'Plus Jakarta Sans'; font-style: normal; font-weight: 200 800; font-display: swap; src: url('./assets/fonts/plus-jakarta-sans-var.woff2') format('woff2'); }
+
+/* New Brutalism numbers and codes */
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 600; font-display: swap; src: url('./assets/fonts/jetbrains-mono-600.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 700; font-display: swap; src: url('./assets/fonts/jetbrains-mono-700.woff2') format('woff2'); }

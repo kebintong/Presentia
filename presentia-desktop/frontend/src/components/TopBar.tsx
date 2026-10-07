@@ -1,7 +1,5 @@
 import React from 'react'
-import PresentiaLogo from './PresentiaLogo'
-import markLight from '../assets/images/presentia-mark-light.png'
-import markDark from '../assets/images/presentia-mark-dark.png'
+import BrandTile from './BrandTile'
 import { ClassInfo, classLabel } from '../classes'
 
 type Page = 'register' | 'students' | 'meet' | 'session' | 'reports'
@@ -13,32 +11,19 @@ interface TopBarProps {
   engineReady: boolean
   /** Startup detail while the engine is not ready yet (e.g. download progress). */
   engineMessage?: string
-  theme: 'dark' | 'light'
-  onToggleTheme: () => void
   /** Build version, shown beside the title. Empty outside the desktop shell. */
   version?: string
-  /** Experimental iridescent design: spectrum mark, theme locked to dark. */
-  iridescent?: boolean
   /** The open class; null on the start screen. */
   activeClass?: ClassInfo | null
   /** Back to the start screen to pick another class. */
   onSwitchClass?: () => void
 }
 
-/** Brand mark size in the top bar. MARK_WIDEN stretches it horizontally
- *  (1 = the artwork's natural 1325:2000 proportions). */
-const MARK_H = 24
-const MARK_WIDEN = 1.2
-const MARK_W = Math.round(((MARK_H * 1325) / 2000) * MARK_WIDEN)
-
 export default function TopBar({
   activePage,
   engineReady,
   engineMessage = '',
-  theme,
-  onToggleTheme,
   version,
-  iridescent = false,
   activeClass = null,
   onSwitchClass,
 }: TopBarProps) {
@@ -73,20 +58,9 @@ export default function TopBar({
     <header className="top-bar">
       {/* Left side: "P" Brand Logo + Title */}
       <div className="top-bar-left">
-        {/* Presentia mark — cyan in light mode, white in dark, spectrum when iridescent */}
+        {/* The app icon on a tile; its colours follow the theme (themes.css). */}
         <div className="top-brand-emblem" title="Presentia">
-          {iridescent ? (
-            <PresentiaLogo height={MARK_H} width={MARK_W} className="brand-iri-logo" />
-          ) : (
-            <img
-              src={theme === 'dark' ? markDark : markLight}
-              alt=""
-              className="brand-mark"
-              height={MARK_H}
-              width={MARK_W}
-              style={{ width: MARK_W, height: MARK_H }}
-            />
-          )}
+          <BrandTile />
         </div>
 
         {/* App Title */}
@@ -118,7 +92,7 @@ export default function TopBar({
         </span>
       </div>
 
-      {/* Right side: Engine Status + Theme Toggle + Wider Window Controls */}
+      {/* Right side: Engine Status + Wider Window Controls */}
       <div className="top-bar-right">
         {/* Engine status indicator pill */}
         <div className={`engine-pill ${engineReady ? 'ready' : 'loading'}`}>
@@ -128,30 +102,6 @@ export default function TopBar({
           </span>
         </div>
 
-        {/* Theme Toggle Button (Dark / Light) */}
-        <button
-          className="theme-toggle-btn"
-          onClick={onToggleTheme}
-          disabled={iridescent}
-          title={
-            iridescent
-              ? 'Iridescent Design is dark-only — turn it off in Settings to use Light mode'
-              : theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'
-          }
-          aria-label="Toggle Theme"
-        >
-          {theme === 'dark' ? (
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="4" />
-              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-            </svg>
-          ) : (
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-            </svg>
-          )}
-          <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
-        </button>
 
         {/* Wider Window Controls (Minimize, Maximize, Close) */}
         <div className="window-controls">

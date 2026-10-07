@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800;900&family=Manrope:wght@400;500;600;700&display=swap');
+@import './fonts.css';
 @import "tailwindcss";
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1191,6 +1191,16 @@ select.input option {
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
 }
 
+/* The panel scrolls inside rounded corners: keep the scrollbar off the
+   corners and a few pixels in from the edge so it never crosses the border. */
+.settings-panel::-webkit-scrollbar { width: 12px; }
+.settings-panel::-webkit-scrollbar-track { margin: calc(var(--radius-xl) + 6px) 0; }
+.settings-panel::-webkit-scrollbar-thumb {
+  border: 4px solid transparent;
+  background-clip: padding-box;
+  min-height: 40px;
+}
+
 .settings-section {
   display: flex;
   flex-direction: column;
@@ -1600,21 +1610,6 @@ select.input option {
   align-items: center;
   gap: 12px;
   min-width: 0;
-}
-
-.settings-logo-preview {
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  background: #17141F; /* the mark is designed to glow on a dark field */
-  border: 1px solid var(--glass-border);
-}
-.settings-logo-preview .presentia-logo {
-  filter: drop-shadow(0 0 4px rgba(239, 238, 198, 0.45));
 }
 
 .toggle-switch {

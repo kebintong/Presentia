@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
-import PresentiaLogo from './PresentiaLogo'
+import ThemePicker from './ThemePicker'
+import { ThemeKey } from '../themes'
 import PerformanceSettings from './PerformanceSettings'
 import AccessibilitySettings from './AccessibilitySettings'
 import DiagnosticsSettings from './DiagnosticsSettings'
@@ -45,10 +46,8 @@ interface SettingsPanelProps {
   onClose: () => void
   update: UpdateInfo | null
   version: string
-  theme: 'dark' | 'light'
-  onToggleTheme: () => void
-  iridescent: boolean
-  onToggleIridescent: () => void
+  themeKey: ThemeKey
+  onChooseTheme: (key: ThemeKey) => void
   animations: boolean
   onToggleAnimations: () => void
   onRecheck: () => Promise<UpdateInfo | null>
@@ -59,8 +58,8 @@ interface SettingsPanelProps {
 const goApp = () => (window as any)['go']?.['main']?.['App']
 
 export default function SettingsPanel({
-  open, onClose, update, version, theme, onToggleTheme,
-  iridescent, onToggleIridescent, animations, onToggleAnimations, onRecheck, focusTab,
+  open, onClose, update, version, themeKey, onChooseTheme,
+  animations, onToggleAnimations, onRecheck, focusTab,
 }: SettingsPanelProps) {
   const [phase, setPhase]         = useState<Phase>('idle')
   const [progress, setProgress]   = useState(0)
@@ -164,22 +163,16 @@ export default function SettingsPanel({
         </div>
 
         {/* ── Appearance ─────────────────────────────────────────── */}
-        {tab === 'appearance' && (<>
+        {tab === 'appearance' && (
         <div className="settings-section">
           <span className="field-label">Appearance</span>
-          <div className="settings-row">
+          <div className="theme-picker-head">
             <div>
               <div className="settings-row-title">Theme</div>
-              <div className="settings-row-sub">
-                {iridescent
-                  ? 'Locked to dark while Iridescent Design is on'
-                  : `Currently ${theme === 'dark' ? 'dark' : 'light'}`}
-              </div>
+              <div className="settings-row-sub">Pick how Presentia looks. Your choice is saved on this computer.</div>
             </div>
-            <button className="btn-ghost" onClick={onToggleTheme} disabled={iridescent}>
-              Switch to {theme === 'dark' ? 'Light' : 'Dark'}
-            </button>
           </div>
+          <ThemePicker value={themeKey} onChange={onChooseTheme} />
           <div className="settings-row">
             <div>
               <div className="settings-row-title">Animations</div>
@@ -199,39 +192,7 @@ export default function SettingsPanel({
             </button>
           </div>
         </div>
-
-        {/* ── Experimental (appearance) ────────────────────────── */}
-        <div className="settings-section">
-          <span className="field-label">Experimental</span>
-          <div className="settings-row">
-            <div className="settings-row-lead">
-              <div className="settings-logo-preview">
-                <PresentiaLogo height={28} />
-              </div>
-              <div>
-                <div className="settings-row-title">
-                  Iridescent Design
-                  <span className="update-pill experimental-pill">Beta</span>
-                </div>
-                <div className="settings-row-sub">
-                  Spectrum accents across the app and on the monitor bubble. Dark mode only.
-                </div>
-              </div>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={iridescent}
-              aria-label="Iridescent Design"
-              className={`toggle-switch ${iridescent ? 'on' : ''}`}
-              onClick={onToggleIridescent}
-            >
-              <span className="toggle-knob" />
-            </button>
-          </div>
-        </div>
-
-        </>)}
+        )}
 
         {/* ── Performance ─────────────────────────────────────── */}
         {tab === 'performance' && <PerformanceSettings />}

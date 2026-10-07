@@ -410,7 +410,7 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
       <section className="hero-banner">
         <div className="hero-top-row">
           <div className="hero-title-group">
-            <h1 className="hero-title">Presentia</h1>
+            <h1 className="hero-title">Student Registration</h1>
             <p className="hero-subtitle">
               Register students for <strong style={{ color: 'var(--ink)' }}>{classInfo.name}</strong>
               <span title="Students will use this code to register online"> · Join code {formatJoinCode(classInfo.join_code)}</span>
@@ -522,7 +522,7 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
               <label className="field-label">Capture Mode</label>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <button
-                  className="btn-primary"
+                  className="btn-primary capture-btn"
                   onClick={startWebcam}
                   style={{ width: '100%', justifyContent: 'center' }}
                 >
@@ -534,7 +534,7 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
                 </button>
 
                 <button
-                  className="btn-ghost"
+                  className="btn-ghost capture-btn"
                   onClick={importPhotos}
                   disabled={loading}
                   style={{ width: '100%', justifyContent: 'center' }}
