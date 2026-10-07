@@ -13,3 +13,5 @@ func closePipNative()                                    {}
 func pipFrameNative(b64 string)                          {}
 func pipStatusNative(badge, count, msg, idleText string) {}
 func bubbleTaskDone()                                    {}
+func setHideFromCaptureNative(hide bool)                 {}
+func bubbleSourcePicked(text string)                     {}

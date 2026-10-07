@@ -74,6 +74,32 @@ const PAUSED_CAPTURE: Record<string, string> = {
   covered: 'window covered',
 }
 
+// Crop the picked part of the picker's screenshot into a small JPEG
+// (fractions of the picture, so the screenshot's own scale does not matter).
+function makeThumb(jpeg: string, fx: number, fy: number, fw: number, fh: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const sw = Math.max(1, fw * img.naturalWidth), sh = Math.max(1, fh * img.naturalHeight)
+      const k = Math.min(1, 320 / sw, 180 / sh)
+      const c = document.createElement('canvas')
+      c.width = Math.max(1, Math.round(sw * k)); c.height = Math.max(1, Math.round(sh * k))
+      const ctx = c.getContext('2d')
+      if (!ctx) { reject(new Error('no canvas')); return }
+      ctx.drawImage(img, fx * img.naturalWidth, fy * img.naturalHeight, sw, sh, 0, 0, c.width, c.height)
+      resolve(c.toDataURL('image/jpeg', 0.8))
+    }
+    img.onerror = () => reject(new Error('thumbnail'))
+    img.src = `data:image/jpeg;base64,${jpeg}`
+  })
+}
+
+// Tell the native side what was picked; it shows a Windows notification when
+// the app is going straight back to the tray (picked from the bubble).
+const sourcePicked = (text: string) => {
+  try { (window as any)['go']?.['main']?.['App']?.['SourcePicked']?.(text)?.catch?.(() => {}) } catch { /* browser preview */ }
+}
+
 export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
   const [sessionName, setSessionName]   = useState('')
   const [missingAfter, setMissingAfter] = useState(5)
@@ -90,6 +116,8 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
     setHasFrame(f !== null)
   }, [feed])
   const [region, setRegion]             = useState<Region | null>(null)
+  // A small picture of the picked screen area, so it is plain what is watched.
+  const [regionThumb, setRegionThumb]   = useState<string | null>(null)
   const [roster, setRoster]             = useState<RosterStudent[]>([])
   const [unknowns, setUnknowns]         = useState<UnknownFace[]>([])
   const [alerts, setAlerts]             = useState<AlertItem[]>([])
@@ -169,7 +197,35 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
     }
   }
 
+  // Leave the picker without choosing an area (ESC, right-click, Cancel).
+  const cancelPick = async () => {
+    dragStart.current = null
+    setPicking(false)
+    setScreenshot(null)
+    setSelRect(null)
+    try { await ExitPickerMode() } catch {}
+  }
+
+  // ESC is listened for on the whole window, not on the overlay: a <div> never
+  // takes focus from React's autoFocus, and the drag's preventDefault() stops a
+  // click from focusing it, so a key handler on the overlay never fired.
+  useEffect(() => {
+    if (!picking) return
+    window.focus()
+    overlayRef.current?.focus({ preventScroll: true })
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.preventDefault()
+        e.stopPropagation()
+        cancelPick()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [picking])
+
   const onPickMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return // right-click cancels (onContextMenu)
     e.preventDefault()
     dragStart.current = { x: e.clientX, y: e.clientY }
     setSelRect({ x: e.clientX, y: e.clientY, w: 0, h: 0 })
@@ -188,7 +244,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
   const onPickMouseUp = async (e: React.MouseEvent<HTMLDivElement>) => {
     if (!dragStart.current || !screenshot || !selRect || selRect.w < 10 || selRect.h < 10) {
       dragStart.current = null
-      if (selRect && selRect.w < 10) { setPicking(false); setScreenshot(null); try { await ExitPickerMode() } catch {} }
+      if (selRect && selRect.w < 10) await cancelPick()
       return
     }
     const vw = overlayRef.current?.clientWidth  || window.innerWidth
@@ -201,14 +257,23 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
       width:  Math.round(selRect.w * scaleX),
       height: Math.round(selRect.h * scaleY),
     }
+    const fx = selRect.x / vw, fy = selRect.y / vh, fw = selRect.w / vw, fh = selRect.h / vh
+    const shotJpeg = screenshot.jpeg
     dragStart.current = null
     setPicking(false)
     setScreenshot(null)
     setSelRect(null)
+    // Picked from the bubble, the window goes back to the tray right away:
+    // say what was picked there too (a Windows notification).
+    sourcePicked(`Screen area selected (${region.width} × ${region.height}). Press Start on the bubble or in Presentia.`)
     try { await ExitPickerMode() } catch {}
     setRegion(region)
+    setRegionThumb(null)
+    makeThumb(shotJpeg, fx, fy, fw, fh).then(setRegionThumb).catch(() => {})
     addAlert(`Screen area selected: ${region.width}×${region.height}`, 'info')
   }
+
+  const clearSource = () => { setRegion(null); setRegionThumb(null) }
 
   // ── Windows Tab picker ────────────────────────────────────────────
   const openWinPickerFn = async () => {
@@ -232,6 +297,8 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
     // The window handle lets the sidecar follow the window if it is moved
     // or resized while monitoring.
     setRegion({ left: w.left, top: w.top, width: w.width, height: w.height, hwnd: w.hwnd, title: w.title })
+    setRegionThumb(null)
+    sourcePicked(`Window selected: "${w.title}". Press Start on the bubble or in Presentia.`)
     addAlert(`Window selected: "${w.title}" — it stays monitored when moved or covered by other windows (not when minimised).`, 'info')
     closeWinPicker()
   }
@@ -414,16 +481,6 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
             <p className="hero-subtitle">Google Meet &amp; Zoom Real-Time Participant Face Tracking</p>
           </div>
           <div className="hero-action-cluster">
-            {region && (
-              <div className="hero-status-pill" title={region.hwnd ? `Watching "${region.title}", even behind other windows` : 'Fixed screen area'}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>
-                </svg>
-                <span className="hero-pill-text">
-                  {region.hwnd && region.title ? region.title : `${region.width}×${region.height}`}
-                </span>
-              </div>
-            )}
             {monitoring && (capture && PAUSED_CAPTURE[capture.state] ? (
               <div className="hero-status-pill" style={{ borderColor: 'var(--warn)', color: 'var(--warn)' }}
                    title="No picture of the window is available, so nobody is marked present or missing meanwhile">
@@ -442,22 +499,6 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                 Keep monitoring
               </button>
             )}
-            {/* In-app pickers — the bubble is a convenience, not the only way
-                to choose what to monitor. */}
-            <button className="btn-ghost" onClick={pickRegionFn} disabled={pickLoading || monitoring}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-                <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
-              </svg>
-              {pickLoading ? 'Capturing…' : 'Screen Area'}
-            </button>
-            <button className="btn-ghost" onClick={openWinPickerFn} disabled={monitoring}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/>
-              </svg>
-              Select Window
-            </button>
-
             {/* Open / Close Bubble button */}
             {!bubbleOpen ? (
               <button className="btn-hero-launch" onClick={() => { OpenBubble(); setBubbleOpen(true) }}
@@ -485,10 +526,89 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
           </svg>
           <span>
             Pick what to watch with <strong>Screen Area</strong> or <strong>Select Window</strong>, then
-            press <strong>Launch Monitor</strong>. <strong>Open Bubble</strong> puts the same controls in a
+            press <strong>Start Monitoring</strong>. <strong>Open Bubble</strong> puts the same controls in a
             floating circle that stays above Google Meet while you teach. Click a student in the roster
             to run a liveness check if their video looks suspicious.
           </span>
+        </div>
+      </section>
+
+      {/* ── What is watched + Start ─────────────────────────────────── */}
+      <section className={`launcher-card source-card ${region ? 'has-source' : 'no-source'} ${monitoring ? 'is-live' : ''}`}
+               aria-label="What Presentia watches">
+        <div className="source-preview" aria-hidden="true">
+          {region && !region.hwnd && regionThumb
+            ? <img src={regionThumb} alt="" />
+            : (
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                {region?.hwnd
+                  ? <><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M2 7h20"/><path d="M8 21h8"/><path d="M12 17v4"/></>
+                  : <><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/></>}
+              </svg>
+            )}
+        </div>
+        <div className="source-text">
+          <span className="field-label" style={{ margin: 0 }}>
+            {monitoring ? 'Monitoring' : region ? 'Ready to monitor' : 'Step 1 · Choose what to watch'}
+          </span>
+          {region ? (
+            <>
+              <div className="source-title">
+                {region.hwnd ? (region.title || 'Selected window') : 'Screen area'}
+              </div>
+              <div className="source-sub">
+                {region.hwnd
+                  ? 'Followed when it moves, even behind other windows (not when minimised)'
+                  : `${region.width} × ${region.height} px at ${region.left}, ${region.top}`}
+              </div>
+            </>
+          ) : (
+            <div className="source-sub">
+              Drag over the meeting's video tiles, or pick the Meet / Zoom / Teams window.
+            </div>
+          )}
+        </div>
+        <div className="source-actions">
+          {!monitoring && (
+            <>
+              <button className="btn-ghost" onClick={pickRegionFn} disabled={pickLoading}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                  <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+                </svg>
+                {pickLoading ? 'Capturing…' : region && !region.hwnd ? 'Change Area' : 'Screen Area'}
+              </button>
+              <button className="btn-ghost" onClick={openWinPickerFn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/>
+                </svg>
+                {region?.hwnd ? 'Change Window' : 'Select Window'}
+              </button>
+              {region && (
+                <button className="btn-icon source-clear" onClick={clearSource} title="Clear selection" aria-label="Clear selection">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              )}
+            </>
+          )}
+          {monitoring ? (
+            <button className="btn-primary source-start source-stop" onClick={stopMonitoring}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <rect x="6" y="6" width="12" height="12" rx="2"/>
+              </svg>
+              Stop Monitoring
+            </button>
+          ) : (
+            <button className="btn-primary source-start" onClick={startMonitoringFn} disabled={!region}
+                    title={region ? undefined : 'Choose a screen area or a window first'}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+              Start Monitoring
+            </button>
+          )}
         </div>
       </section>
 
@@ -524,25 +644,6 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                 <span style={{ fontSize: 12, color: 'var(--muted)' }}>seconds</span>
               </div>
             </div>
-
-            {region && !monitoring && (
-              <button className="btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-                onClick={startMonitoringFn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <polygon points="5 3 19 12 5 21 5 3"/>
-                </svg>
-                Launch Monitor
-              </button>
-            )}
-            {monitoring && (
-              <button className="btn-primary" style={{ width: '100%', justifyContent: 'center', background: 'var(--missing)' }}
-                onClick={stopMonitoring}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <rect x="6" y="6" width="12" height="12" rx="2"/>
-                </svg>
-                Stop Monitoring
-              </button>
-            )}
 
             <div style={{ flex: 1, minHeight: 200, maxHeight: 300, overflowY: 'auto' }}>
               <RosterList students={roster} onStudentClick={onRosterClick} verifyingId={verifyingId}/>
@@ -657,9 +758,8 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
           onMouseDown={onPickMouseDown}
           onMouseMove={onPickMouseMove}
           onMouseUp={onPickMouseUp}
-          onKeyDown={async (e) => { if (e.key === 'Escape') { setPicking(false); setScreenshot(null); setSelRect(null); try { await ExitPickerMode() } catch {} } }}
-          tabIndex={0}
-          autoFocus
+          onContextMenu={(e) => { e.preventDefault(); cancelPick() }}
+          tabIndex={-1}
         >
           <img src={`data:image/jpeg;base64,${screenshot.jpeg}`} alt="Screen" className="screen-picker-bg" draggable={false}/>
           <div className="screen-picker-dim" />
@@ -668,7 +768,13 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
               <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
               <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
             </svg>
-            Drag to select the area to monitor · <kbd>ESC</kbd> to cancel
+            Drag to select the area to monitor · <kbd>ESC</kbd> or right-click to cancel
+            <button type="button" className="screen-picker-cancel"
+              onMouseDown={(e) => e.stopPropagation()}
+              onMouseUp={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); cancelPick() }}>
+              Cancel
+            </button>
           </div>
           {selRect && selRect.w > 2 && (
             <div className="screen-picker-sel" style={{ left: selRect.x, top: selRect.y, width: selRect.w, height: selRect.h }}>

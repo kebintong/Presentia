@@ -232,16 +232,12 @@ func ensureWndProcs() {
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
 
-var bSetWindowDisplayAffinity = bUser32.NewProc("SetWindowDisplayAffinity")
-
-// excludeFromCapture keeps one of Presentia's floating windows (bubble,
-// dial, stats chip, pop-out) out of screen captures — including our own
-// Meet monitoring, which otherwise films the Live View inside itself, and
-// the instructor's screen share. Windows 10 2004+; a no-op before that.
+// excludeFromCapture applies the "Hide Presentia from screen recordings"
+// setting to one of Presentia's windows as it opens (see capture_win.go).
+// Off by default: the windows show in recordings and screenshots, and the
+// Meet monitor paints them out of what it analyses instead.
 func excludeFromCapture(hwnd uintptr) {
-	if hwnd != 0 && bSetWindowDisplayAffinity.Find() == nil {
-		bSetWindowDisplayAffinity.Call(hwnd, 0x11) // WDA_EXCLUDEFROMCAPTURE
-	}
+	applyCaptureAffinity(hwnd)
 }
 
 // drawText renders one string, keeping every pointer alive across the call.
@@ -573,6 +569,15 @@ func CloseFloatingBubble() {
 	gBubbleMu.Unlock()
 	if h != 0 {
 		bPostMessageW.Call(h, bWmClose, 0, 0)
+	}
+}
+
+// bubbleSourcePicked confirms a screen area or window picked from the
+// bubble. The app goes straight back to the tray, so without this nothing
+// on screen would show that the pick worked.
+func bubbleSourcePicked(text string) {
+	if gBubbleTask && bubbleActive() && !gPinned {
+		trayNotify("Presentia", text)
 	}
 }
 

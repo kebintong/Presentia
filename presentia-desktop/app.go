@@ -480,6 +480,19 @@ func (a *App) SetBubbleStyle(iridescent bool) {
 	setBubbleStyleNative(iridescent)
 }
 
+// SourcePicked is called by the Monitor page right after a screen area or
+// window is chosen; when the choice came from the bubble it is confirmed
+// with a Windows notification (the app window goes back to the tray).
+func (a *App) SourcePicked(text string) {
+	bubbleSourcePicked(text)
+}
+
+// SetHideFromCapture keeps every Presentia window out of screen recordings,
+// screenshots and screen sharing (true) or lets them show (false, default).
+func (a *App) SetHideFromCapture(hide bool) {
+	setHideFromCaptureNative(hide)
+}
+
 // CloseBubble destroys the native bubble window.
 func (a *App) CloseBubble() {
 	CloseFloatingBubble()

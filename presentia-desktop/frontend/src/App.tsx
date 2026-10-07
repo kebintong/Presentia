@@ -2,6 +2,7 @@ import React, { useState, useEffect, useLayoutEffect } from 'react'
 import TopBar from './components/TopBar'
 import { switchTheme } from './themeTransition'
 import { ThemeKey, loadTheme, saveTheme, themeInfo } from './themes'
+import { applyHideFromCapture, loadHideFromCapture } from './captureVisibility'
 import Sidebar from './components/Sidebar'
 import SettingsPanel, { UpdateInfo, Tab as SettingsTab } from './components/SettingsPanel'
 import UpdateNotice from './components/UpdateNotice'
@@ -64,6 +65,10 @@ export default function App() {
     goApp()?.['SetBubbleTheme']?.(info.mode === 'dark')
     goApp()?.['SetBubbleStyle']?.(themeKey === 'iri')
   }, [themeKey, info])
+
+  // Show (default) or hide every Presentia window in screen captures. Applied
+  // once at start-up; Settings → Appearance changes it after that.
+  useEffect(() => { applyHideFromCapture(loadHideFromCapture()) }, [])
 
   const chooseTheme = (key: ThemeKey) => {
     if (key === themeKey) return

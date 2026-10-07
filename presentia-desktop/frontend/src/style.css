@@ -591,6 +591,53 @@ button {
   font-weight: 500;
 }
 
+/* ── Monitor: what is watched + Start ──────────────────────────────── */
+.launcher-card.source-card {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 18px;
+  padding: 14px 16px;
+  flex-shrink: 0;
+}
+.source-preview {
+  width: 112px;
+  height: 64px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  border: 1.5px dashed var(--pill-border);
+  background: var(--pill-bg);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.source-card.has-source .source-preview {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.source-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.source-card.is-live .source-preview { border-color: var(--present); box-shadow: 0 0 0 3px color-mix(in srgb, var(--present) 22%, transparent); }
+.source-text { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.source-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-heading);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-sub { font-size: 12.5px; color: var(--muted); }
+.source-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.source-start { min-width: 168px; justify-content: center; }
+.source-start:disabled { opacity: .45; cursor: not-allowed; filter: grayscale(.4); }
+/* Red in every theme (the themes restyle .btn-primary with stronger selectors). */
+.btn-primary.source-stop { background: var(--missing) !important; color: #FFFFFF !important; }
+.btn-primary.source-stop:hover:not(:disabled) { filter: brightness(1.08); }
+.source-card.is-live .field-label { color: var(--present); }
+
 /* ══════════════════════════════════════════════════════════════════
    CARDS
    ══════════════════════════════════════════════════════════════════ */
@@ -1135,6 +1182,21 @@ select.input option {
   font-family: var(--body);
   font-size: 11px;
 }
+
+.screen-picker-cancel {
+  pointer-events: auto;
+  margin-left: 6px;
+  padding: 3px 12px;
+  border-radius: 100px;
+  border: 1px solid rgba(255,255,255,0.28);
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.screen-picker-cancel:hover { background: rgba(255,255,255,0.24); }
+.screen-picker-overlay:focus { outline: none; }
 
 /* The dragged selection rectangle */
 .screen-picker-sel {

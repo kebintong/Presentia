@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from app.data import cloud, db
 from app.core import diag, perf
+from app.core.self_mask import SelfMask
 from app.core.face_engine import FaceEngine, MATCH_THRESHOLD
 
 # ── DB init ──────────────────────────────────────────────────────────────────
@@ -1235,6 +1236,10 @@ async def monitor_frame(after: int = 0) -> Response:
 
 # ── Following a selected window ───────────────────────────────────────────────
 
+# Presentia's own windows, painted out of screen-area grabs (see self_mask.py).
+_SELF_MASK = SelfMask()
+
+
 class _WindowFollower:
     """Captures one top-level window, wherever it is (Windows only).
 
@@ -1414,7 +1419,9 @@ class _WindowFollower:
         if right - left < 40 or bottom - top < 40:
             return None
         shot = sct.grab({"left": left, "top": top, "width": right - left, "height": bottom - top})
-        return np.ascontiguousarray(np.asarray(shot, dtype=np.uint8)[:, :, :3])
+        frame = np.ascontiguousarray(np.asarray(shot, dtype=np.uint8)[:, :, :3])
+        # Presentia's own windows show up on screen now; never analyse them.
+        return _SELF_MASK.apply(frame, left, top)
 
     def capture(self, sct, desktop: dict, monitors: list) -> tuple[str, np.ndarray | None]:
         """(state, BGR frame or None).
@@ -2151,6 +2158,10 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                     else:
                         shot = sct.grab(region)
                         frame = np.ascontiguousarray(np.asarray(shot, dtype=np.uint8)[:, :, :3])
+                        # The bubble, Live View or the app itself may sit over
+                        # the area and are visible to screen grabs: paint them
+                        # out so their faces are not counted again.
+                        frame = _SELF_MASK.apply(frame, region["left"], region["top"])
                     to_analyse.put(frame)
                     if challenge_on.is_set():
                         # Every preview frame: a blink is over in ~0.2 s.

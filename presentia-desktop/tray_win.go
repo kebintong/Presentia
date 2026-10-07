@@ -248,6 +248,29 @@ func removeTray() {
 	gTrayHwnd = 0
 }
 
+// trayNotify shows a Windows notification from the tray icon (any thread).
+// Only while the bubble's tray icon exists; otherwise the app is on screen
+// and says it there.
+func trayNotify(title, text string) {
+	if gTrayHwnd == 0 {
+		return
+	}
+	const nifInfo, niifInfo, niifNoSound = 0x10, 0x1, 0x10
+	nid := trayData(nifInfo)
+	t, _ := syscall.UTF16FromString(title)
+	if len(t) > len(nid.SzInfoTitle) {
+		t = append(t[:len(nid.SzInfoTitle)-1], 0)
+	}
+	copy(nid.SzInfoTitle[:], t)
+	m, _ := syscall.UTF16FromString(text)
+	if len(m) > len(nid.SzInfo) {
+		m = append(m[:len(nid.SzInfo)-1], 0)
+	}
+	copy(nid.SzInfo[:], m)
+	nid.DwInfoFlags = niifInfo | niifNoSound
+	bShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+}
+
 // trayTip updates the hover text (any thread).
 func trayTip(text string) {
 	gTrayMu.Lock()

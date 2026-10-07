@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import ThemePicker from './ThemePicker'
 import { ThemeKey } from '../themes'
+import { applyHideFromCapture, loadHideFromCapture } from '../captureVisibility'
 import PerformanceSettings from './PerformanceSettings'
 import AccessibilitySettings from './AccessibilitySettings'
 import DiagnosticsSettings from './DiagnosticsSettings'
@@ -66,6 +67,7 @@ export default function SettingsPanel({
   const [message, setMessage]     = useState('')
   const [installer, setInstaller] = useState('')
   const [tab, setTab]             = useState<Tab>(loadTab)
+  const [hideCapture, setHideCapture] = useState<boolean>(loadHideFromCapture)
 
   const chooseTab = (t: Tab) => {
     setTab(t)
@@ -187,6 +189,26 @@ export default function SettingsPanel({
               aria-label="Animations"
               className={`toggle-switch ${animations ? 'on' : ''}`}
               onClick={onToggleAnimations}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </div>
+          <div className="settings-row">
+            <div>
+              <div className="settings-row-title">Hide Presentia from screen recordings</div>
+              <div className="settings-row-sub">
+                Keeps Presentia, the bubble and Live View out of screenshots, recordings and screen
+                sharing. Off: they show like any other app. The monitor never counts faces on
+                Presentia's own windows either way.
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={hideCapture}
+              aria-label="Hide Presentia from screen recordings"
+              className={`toggle-switch ${hideCapture ? 'on' : ''}`}
+              onClick={() => { const v = !hideCapture; setHideCapture(v); applyHideFromCapture(v) }}
             >
               <span className="toggle-knob" />
             </button>

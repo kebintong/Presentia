@@ -98,6 +98,10 @@ export function SetBubbleTheme(arg1) {
   return window['go']['main']['App']['SetBubbleTheme'](arg1);
 }
 
+export function SetHideFromCapture(arg1) {
+  return window['go']['main']['App']['SetHideFromCapture'](arg1);
+}
+
 export function ShowMainWindow() {
   return window['go']['main']['App']['ShowMainWindow']();
 }

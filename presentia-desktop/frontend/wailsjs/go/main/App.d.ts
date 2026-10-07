@@ -50,6 +50,8 @@ export function SetBubbleStyle(arg1:boolean):Promise<void>;
 
 export function SetBubbleTheme(arg1:boolean):Promise<void>;
 
+export function SetHideFromCapture(arg1:boolean):Promise<void>;
+
 export function ShowMainWindow():Promise<void>;
 
 export function SidecarURL():Promise<string>;

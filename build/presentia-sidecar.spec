@@ -92,6 +92,13 @@ hiddenimports += [
     "app.core.tile_tracker",
     "app.core.tile_challenge",
     "app.core.stillness",
+    "app.core.self_mask",
+    "app.core.attendance",
+    "app.core.attendance.core",
+    "app.core.attendance.freeze",
+    "app.core.attendance.messages",
+    "app.core.attendance.model",
+    "app.core.attendance.rules",
     "app.core.v4l2_reader",
     "app.core.diag",
 ]
