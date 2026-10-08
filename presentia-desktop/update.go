@@ -36,7 +36,7 @@ import (
 // IMPORTANT: keep this in sync with MyAppVersion in build/installer.iss and
 // with the git tag you publish. If this is lower than the newest release tag,
 // users see the update banner — that comparison is the whole mechanism.
-const AppVersion = "1.6.0"
+const AppVersion = "1.6.1"
 
 // GitHubRepo is the "owner/name" of the repository whose Releases are checked.
 //
