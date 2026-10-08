@@ -19,6 +19,10 @@ export interface UpdateInfo {
   checkedAt: string
   /** Every release newer than this computer's version, newest first. */
   releases?: ReleaseNote[]
+  /** The running version's notes. */
+  installed?: ReleaseNote
+  /** The newest release's page on GitHub. */
+  pageUrl?: string
 }
 
 type Phase = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
@@ -46,6 +50,8 @@ interface SettingsPanelProps {
   open: boolean
   onClose: () => void
   update: UpdateInfo | null
+  /** Notes of the version that is running (shown when it is the latest). */
+  installed?: ReleaseNote | null
   version: string
   themeKey: ThemeKey
   onChooseTheme: (key: ThemeKey) => void
@@ -59,7 +65,7 @@ interface SettingsPanelProps {
 const goApp = () => (window as any)['go']?.['main']?.['App']
 
 export default function SettingsPanel({
-  open, onClose, update, version, themeKey, onChooseTheme,
+  open, onClose, update, installed, version, themeKey, onChooseTheme,
   animations, onToggleAnimations, onRecheck, focusTab,
 }: SettingsPanelProps) {
   const [phase, setPhase]         = useState<Phase>('idle')
@@ -258,9 +264,23 @@ export default function SettingsPanel({
               </div>
             ) : (
               <div className="settings-notes">
-                <ReleaseNotes body={update.notes} empty="No details were given for this version." />
+                <ReleaseNotes body={update.notes} empty="The notes for this version could not be loaded." />
               </div>
             )
+          )}
+          {update?.available && !missed && !update.notes?.trim() && update.pageUrl && (
+            <button type="button" className="link-button settings-notes-link"
+                    onClick={() => goApp()?.['OpenDownloadPage']?.(update.pageUrl)}>
+              Read the notes on GitHub
+            </button>
+          )}
+
+          {/* Up to date: what changed in the version that is running. */}
+          {!update?.available && installed && (
+            <div className="settings-notes">
+              <div className="settings-notes-title">What's new in {installed.version}</div>
+              <ReleaseNotes body={installed.notes} empty="No details were given for this version." />
+            </div>
           )}
 
           {update?.available && (

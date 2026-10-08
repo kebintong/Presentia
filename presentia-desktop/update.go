@@ -68,6 +68,12 @@ type UpdateInfo struct {
 	// Every published release newer than the running version, newest first,
 	// so someone several versions behind sees everything they missed.
 	Releases []ReleaseNote `json:"releases,omitempty"`
+	// The notes of the version that is running, so Settings → Updates can
+	// show what changed after an update.
+	Installed *ReleaseNote `json:"installed,omitempty"`
+	// The newest release's page on GitHub: where the notes can always be
+	// read, even when the app could not fetch them.
+	PageURL string `json:"pageUrl,omitempty"`
 }
 
 // ReleaseNote is one published release's notes.
@@ -146,6 +152,12 @@ func (a *App) CheckForUpdate(force bool) (UpdateInfo, error) {
 			// known: still offer the update, with the installer's usual link.
 			info.Latest = strings.TrimPrefix(tag, "v")
 			info.URL = fmt.Sprintf("https://github.com/%s/releases/download/%s/PresentiaSetup.exe", GitHubRepo, tag)
+			info.PageURL = fmt.Sprintf("https://github.com/%s/releases/tag/%s", GitHubRepo, tag)
+			// Keep what is known about the running version's notes.
+			if haveCache {
+				info.Releases = cached.Releases
+			}
+			info = reevaluate(info)
 			info.CheckedAt = time.Now().Format(time.RFC3339)
 			info.Available = versionLess(AppVersion, info.Latest)
 			if a.ctx != nil {
@@ -194,6 +206,7 @@ func infoFromReleases(rels []ghRelease) UpdateInfo {
 	info.Latest = strings.TrimPrefix(newest.TagName, "v")
 	info.Notes = strings.TrimSpace(newest.Body)
 	info.URL = newest.HTMLURL
+	info.PageURL = newest.HTMLURL
 	// Prefer linking straight at the installer when the release has one.
 	for _, asset := range newest.Assets {
 		if strings.HasSuffix(strings.ToLower(asset.Name), ".exe") {
@@ -221,9 +234,13 @@ func reevaluate(cached UpdateInfo) UpdateInfo {
 	cached.Current = AppVersion
 	cached.Available = cached.Latest != "" && versionLess(AppVersion, cached.Latest)
 	var missed []ReleaseNote
+	cached.Installed = nil
 	for _, r := range cached.Releases {
 		if versionLess(AppVersion, r.Version) {
 			missed = append(missed, r)
+		} else if r.Version == AppVersion {
+			installed := r
+			cached.Installed = &installed
 		}
 	}
 	cached.Releases = missed

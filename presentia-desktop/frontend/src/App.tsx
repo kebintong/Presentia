@@ -6,6 +6,7 @@ import { applyHideFromCapture, loadHideFromCapture } from './captureVisibility'
 import { listenToBubble, clearPendingBubbleCmds, rememberSource, tellBubbleSource } from './bubbleBridge'
 import Sidebar from './components/Sidebar'
 import SettingsPanel, { UpdateInfo, Tab as SettingsTab } from './components/SettingsPanel'
+import type { ReleaseNote } from './components/UpdateHistory'
 import UpdateNotice from './components/UpdateNotice'
 import ProblemPrompt from './components/ProblemPrompt'
 import RegisterPage from './pages/RegisterPage'
@@ -149,6 +150,8 @@ export default function App() {
   // without a banner.
   const [version, setVersion] = useState('')
   const [update, setUpdate] = useState<UpdateInfo | null>(null)
+  // The notes of the version that is running ("What's new" after an update).
+  const [installedNotes, setInstalledNotes] = useState<ReleaseNote | null>(null)
 
   useEffect(() => {
     const app = goApp()
@@ -166,6 +169,7 @@ export default function App() {
       app['CheckForUpdate']?.(false)
         .then((info: UpdateInfo) => {
           if (info?.available) setUpdate(info)
+          if (info?.installed) setInstalledNotes(info.installed)
         })
         .catch(() => {
           // Offline or rate-limited — not something to bother the user with.
@@ -189,6 +193,7 @@ export default function App() {
     if (!app) return null
     const info: UpdateInfo = await app['CheckForUpdate'](true)
     setUpdate(info?.available ? info : null)
+    if (info?.installed) setInstalledNotes(info.installed)
     return info
   }
 
@@ -257,6 +262,7 @@ export default function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         update={update}
+        installed={installedNotes}
         version={version}
         themeKey={themeKey}
         onChooseTheme={chooseTheme}

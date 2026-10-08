@@ -109,4 +109,17 @@ func TestReevaluateTrimsNotes(t *testing.T) {
 	if len(info.Releases) != 4 {
 		t.Error("the cached list itself must stay complete")
 	}
+	if got.Installed == nil || got.Installed.Version != AppVersion {
+		t.Errorf("the running version's notes are kept for Settings → Updates: %+v", got.Installed)
+	}
+	if reevaluate(UpdateInfo{Releases: []ReleaseNote{{Version: "0.0.1"}}}).Installed != nil {
+		t.Error("no notes when the running version is not in the list")
+	}
+}
+
+func TestPageURL(t *testing.T) {
+	r := ghRelease{TagName: "v9.9.9", HTMLURL: "https://github.com/x/y/releases/tag/v9.9.9"}
+	if got := infoFromReleases([]ghRelease{r}).PageURL; got != r.HTMLURL {
+		t.Errorf("PageURL = %q", got)
+	}
 }

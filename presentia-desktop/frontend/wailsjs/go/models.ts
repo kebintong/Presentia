@@ -24,6 +24,8 @@ export namespace main {
 	    url: string;
 	    checkedAt: string;
 	    releases?: ReleaseNote[];
+	    installed?: ReleaseNote;
+	    pageUrl?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInfo(source);
@@ -38,6 +40,8 @@ export namespace main {
 	        this.url = source["url"];
 	        this.checkedAt = source["checkedAt"];
 	        this.releases = this.convertValues(source["releases"], ReleaseNote);
+	        this.installed = this.convertValues(source["installed"], ReleaseNote);
+	        this.pageUrl = source["pageUrl"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

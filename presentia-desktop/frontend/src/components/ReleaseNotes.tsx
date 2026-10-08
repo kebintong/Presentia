@@ -5,7 +5,9 @@ import React from 'react'
  *
  * Only the teacher-facing part is shown: everything from "## Changes since"
  * (the list of commits) or "## Download" on is left out, as is the
- * "Edit this before publishing" reminder. A small subset of Markdown is
+ * "Edit this before publishing" reminder. When nothing was written there
+ * (the release was published with only the reminder), the list of changes
+ * is shown instead, so the notes are never just empty. A small subset of Markdown is
  * understood — headings, bullet lists, **bold**, *italic*, `code` — and
  * turned into React elements, so nothing in the notes is ever run as HTML.
  */
@@ -14,6 +16,36 @@ const CUT_AT = /^#{1,6}\s*(changes since|download)\b/i
 const PLACEHOLDER = /^_?edit this before publishing/i
 
 export function teacherNotes(body: string): string {
+  // A release published without its "What's new" written (only the
+  // placeholder) would show nothing at all; fall back to its list of changes.
+  return writtenNotes(body) || changeList(body)
+}
+
+const CHANGES = /^#{1,6}\s*changes since\b/i
+const MAX_CHANGES = 12
+
+/** The bullet list under "## Changes since …", as notes. */
+export function changeList(body: string): string {
+  const lines = (body || '').replace(/\r\n?/g, '\n').split('\n')
+  const start = lines.findIndex((l) => CHANGES.test(l.trim()))
+  if (start < 0) return ''
+  const items: string[] = []
+  for (const raw of lines.slice(start + 1)) {
+    const line = raw.trim()
+    if (/^#{1,6}\s/.test(line)) break
+    const m = /^[-*+]\s+(.*)$/.exec(line)
+    if (!m) continue
+    const text = m[1].trim()
+    if (!text || /^(release|merge)\b/i.test(text)) continue
+    items.push(text)
+  }
+  if (!items.length) return ''
+  const shown = items.slice(0, MAX_CHANGES).map((t) => `- ${t}`)
+  if (items.length > MAX_CHANGES) shown.push(`- …and ${items.length - MAX_CHANGES} more`)
+  return ['### Changes in this version', ...shown].join('\n')
+}
+
+function writtenNotes(body: string): string {
   const out: string[] = []
   for (const raw of (body || '').replace(/\r\n?/g, '\n').split('\n')) {
     const line = raw.trimEnd()

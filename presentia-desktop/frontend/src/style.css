@@ -1320,6 +1320,9 @@ select.input option {
   line-height: 1.6;
 }
 
+.settings-notes-title { font-weight: 700; font-size: 13px; color: var(--ink-heading); margin-bottom: 6px; }
+.settings-notes-link { align-self: flex-start; font-size: 12.5px; }
+
 /* Settings → Updates when several versions behind (UpdateHistory.tsx). */
 .update-history-box { padding: 0; max-height: 340px; }
 .update-version { border-bottom: 1px solid var(--card-row-border); }
