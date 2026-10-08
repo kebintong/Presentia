@@ -33,6 +33,18 @@ CLAIM_RECENT = 600.0     # …within the last 10 minutes
 MISSES_TO_DROP = 3       # failed re-checks in a row before an identity is dropped
 RETRY_SOON = 2.0         # after a weak or failed re-check, look again this soon (s)
 
+# A face cut off by the edge of its meeting tile is often detected with less
+# confidence than the detector's usual cut-off. With `edge` given, weaker
+# detections are kept when they touch a tile's edge; they can only keep or
+# claim a student by the rules above and are never listed as unknown faces.
+DET_SCORE = 0.5          # the detector's usual cut-off
+EDGE_DET_SCORE = 0.3     # …and for faces at the edge of a tile
+
+# Clear, unambiguous matches are offered for learning how a student looks in
+# meetings (app.core.face_gallery): this score, this far ahead of anyone else.
+LEARN_SCORE = 0.60
+LEARN_MARGIN = 0.15
+
 
 def _iou(a: tuple, b: tuple) -> float:
     ax1, ay1, ax2, ay2 = a
@@ -61,6 +73,13 @@ class TileTracker:
         self._uids = itertools.count(1)
         # where each student was last seen: sid -> (bbox, monotonic time)
         self._last_seen: dict[int, tuple[tuple, float]] = {}
+        # clear matches embedded since the last take_clear(): (sid, emb, score)
+        self._clear: list[tuple[int, np.ndarray, float]] = []
+
+    def take_clear(self) -> list[tuple[int, np.ndarray, float]]:
+        """Clear matches embedded since the last call (see LEARN_SCORE)."""
+        out, self._clear = self._clear, []
+        return out
 
     def reidentify(self) -> None:
         """Re-match cached embeddings against the (updated) known list.
@@ -85,22 +104,33 @@ class TileTracker:
             if keep is None or t["sid"] == keep or t["sid"] is None:
                 t["embedded_at"] = None
 
-    def process(self, frame: np.ndarray) -> tuple[
+    def process(self, frame: np.ndarray, edge: Callable[[tuple], bool] | None = None) -> tuple[
         list[tuple[int, float, tuple[int, int, int, int]]],
         list[tuple[np.ndarray, tuple[int, int, int, int], int]],
     ]:
         """One pass: detect, carry identities forward, embed only what's needed.
 
+        `edge(bbox)` says whether a face box touches the edge of its meeting
+        tile; weaker detections are then kept there (see EDGE_DET_SCORE).
+
         Returns (matches, unknowns): matches as in FaceEngine.analyze_all;
         unknowns as (embedding, bbox, uid) where uid stays the same for as
         long as that face keeps being tracked.
         """
-        detections = self._engine.detect_faces(frame)
+        if edge is None:
+            detections = [(b, sc, k, False) for b, sc, k in self._engine.detect_faces(frame)]
+        else:
+            detections = []
+            for b, sc, k in self._engine.detect_faces(frame, min_score=EDGE_DET_SCORE):
+                if sc >= DET_SCORE:
+                    detections.append((b, sc, k, False))
+                elif edge(b):
+                    detections.append((b, sc, k, True))
         now = time.monotonic()
 
         pool = list(self._tracks)
         next_tracks: list[dict] = []
-        for bbox, _det_score, kps in detections:
+        for bbox, _det_score, kps, weak_det in detections:
             best_track, best_iou = None, IOU_MATCH
             for t in pool:
                 overlap = _iou(bbox, t["bbox"])
@@ -109,12 +139,14 @@ class TileTracker:
             if best_track is not None:
                 pool.remove(best_track)
                 best_track["bbox"], best_track["kps"] = bbox, kps
+                best_track["edge"] = weak_det
                 next_tracks.append(best_track)
             else:
                 next_tracks.append({
                     "uid": next(self._uids),
                     "bbox": bbox, "kps": kps, "sid": None, "score": 0.0,
                     "emb": None, "embedded_at": None, "misses": 0, "weak": False,
+                    "edge": weak_det,
                 })
 
         # embed new faces first, then the stalest verified ones
@@ -130,7 +162,12 @@ class TileTracker:
         for t in candidates[:MAX_EMBEDS_PER_PASS]:
             t["emb"] = self._engine.embed_face(frame, t["bbox"], t["kps"])
             on_screen = {o["sid"] for o in next_tracks if o is not t and o["sid"] is not None}
-            self._decide(t, rank_top2(t["emb"], known), on_screen, now, diag)
+            ranked = rank_top2(t["emb"], known)
+            self._decide(t, ranked, on_screen, now, diag, edge_only=t.get("edge", False))
+            if (t["sid"] is not None and not t.get("edge") and ranked and ranked[0][0] == t["sid"]
+                    and ranked[0][1] >= LEARN_SCORE
+                    and ranked[0][1] - (ranked[1][1] if len(ranked) > 1 else -1.0) >= LEARN_MARGIN):
+                self._clear.append((t["sid"], t["emb"], ranked[0][1]))
 
         for t in next_tracks:
             if t["sid"] is not None:
@@ -142,8 +179,9 @@ class TileTracker:
         unknowns: list[tuple[np.ndarray, tuple, int]] = []
         for t in next_tracks:
             if t["sid"] is None:
-                # skip brand-new boxes that haven't been embedded yet
-                if t["emb"] is not None:
+                # skip brand-new boxes that haven't been embedded yet, and
+                # weak detections at a tile's edge (maybe not a face at all)
+                if t["emb"] is not None and not t.get("edge"):
                     unknowns.append((t["emb"], t["bbox"], t["uid"]))
             elif t["sid"] not in best or t["score"] > best[t["sid"]]["score"]:
                 best[t["sid"]] = t
@@ -151,14 +189,16 @@ class TileTracker:
         return matches, unknowns
 
     def _decide(self, t: dict, ranked: list[tuple[int, float]], on_screen: set[int],
-                now: float, diag: float) -> None:
-        """Set a track's identity from a fresh embedding (see KEEP_SCORE etc.)."""
+                now: float, diag: float, edge_only: bool = False) -> None:
+        """Set a track's identity from a fresh embedding (see KEEP_SCORE etc.).
+        `edge_only`: a weak detection at a tile's edge, which must also beat
+        every other student clearly to be anyone."""
         t["embedded_at"] = now
         best_sid, best = ranked[0] if ranked else (None, -1.0)
         second = ranked[1][1] if len(ranked) > 1 else -1.0
         had = t.get("sid")
 
-        if best_sid is not None and best >= MATCH_THRESHOLD:
+        if best_sid is not None and best >= MATCH_THRESHOLD and (not edge_only or best - second >= CLAIM_MARGIN):
             t["sid"], t["score"], t["misses"], t["weak"] = best_sid, best, 0, False
             return
         if had is not None and best_sid == had and best >= KEEP_SCORE:

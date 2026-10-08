@@ -437,7 +437,7 @@ func emitBubbleCmd(cmd string) {
 	// The pickers are inside the app, so the app has to come out of the tray
 	// for them; bubbleTaskDone sends it back afterwards.
 	switch cmd {
-	case "bubble:win_picker":
+	case "bubble:win_picker", "bubble:tab_share":
 		gBubbleTask = true
 		showMain()
 	case "bubble:screen_area":

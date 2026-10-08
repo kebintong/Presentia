@@ -23,6 +23,14 @@ class Rules:
     # A face missing this long counts as gone (one poor frame never does).
     vanish_grace: float = 5.0
 
+    # Without the student's tile showing the camera-off picture, a missing
+    # face only means "face not seen": shown after this long…
+    unseen_after: float = 30.0
+    # …and only after this long does the camera-off ladder start (from zero).
+    unseen_ladder_after: float = 3 * 60
+    # On camera (live tile) without a clear look this long: one gentle note.
+    unclear_note_after: float = 10 * 60
+
     # Camera-off ladder: one warning per step; warning 4 is Absent.
     warning_step: float = 60.0
     final_level: int = 4

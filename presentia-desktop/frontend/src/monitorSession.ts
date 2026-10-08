@@ -27,7 +27,7 @@ export interface MonitorState {
   sessionId: number | null
   classId: number | null
   /** How the selected window is being captured, and whether that is paused. */
-  capture: { state: string; method: string } | null
+  capture: { state: string; method: string; browser?: boolean; title?: string } | null
   roster: any[]
   unknowns: any[]
   alerts: AlertItem[]
@@ -121,7 +121,7 @@ export function startMonitor(start: Record<string, unknown> & { class_id?: numbe
         addMonitorAlert(data.message, data.level)
         break
       case 'capture':
-        set({ capture: { state: data.state, method: data.method } })
+        set({ capture: { state: data.state, method: data.method, browser: !!data.browser, title: data.title } })
         break
       case 'enrolled':
         addMonitorAlert(`${data.name} enrolled from meeting.`, 'ok')

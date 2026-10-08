@@ -83,14 +83,15 @@ func TestCapsuleStates(t *testing.T) {
 func TestPanelControls(t *testing.T) {
 	th := ThemeFor("dark")
 	none := RenderPanel(View{}, th, boxText{}, 1)
-	if ids(none) != "close,area,window,app,hide" { // Start is disabled: no hit
+	if ids(none) != "close,tab,area,window,app,hide" { // Start is disabled: no hit
 		t.Fatalf("idle hits = %s", ids(none))
 	}
 	ready := RenderPanel(View{SourceKind: "window", SourceLabel: "Meet - CS101", SourceDetail: "Google Chrome"}, th, boxText{}, 1)
-	if ids(ready) != "close,area,window,start,app,hide" {
+	if ids(ready) != "close,tab,area,window,start,app,hide" {
 		t.Fatalf("ready hits = %s", ids(ready))
 	}
-	away := []Student{{"Juan Dela Cruz", 130}, {"Ben Tan", 65}, {"A", 1}, {"B", 2}, {"C", 3}, {"D", 4}}
+	away := []Student{{"Juan Dela Cruz", 130, true}, {"Ben Tan", 65, false}, {"A", 1, false}, {"B", 2, false},
+		{"C", 3, false}, {"D", 4, false}}
 	live := RenderPanel(View{Active: true, Elapsed: 724, Present: 18, Total: 24, Missing: 6, Away: away}, th, boxText{}, 1)
 	want := "close,copy:0,copy:1,copy:2,copy:3,liveview,stop,app,hide"
 	if ids(live) != want {
@@ -145,7 +146,7 @@ func TestGradientAndMark(t *testing.T) {
 	if share := float64(filled) / float64(c.W*c.H); share < 0.35 || share > 0.85 {
 		t.Fatalf("mark coverage %.2f looks wrong", share)
 	}
-	for _, n := range []string{"chev-down", "chev-up", "area", "window", "eye", "copy", "pin", "app", "x", "camoff", "check", "play", "stop"} {
+	for _, n := range []string{"chev-down", "chev-up", "area", "window", "tab", "eye", "copy", "pin", "app", "x", "camoff", "check", "play", "stop"} {
 		if !HasIcon(n) {
 			t.Fatalf("icon %s missing", n)
 		}
@@ -160,6 +161,14 @@ func TestWordsAndTimes(t *testing.T) {
 		t.Fatal(m)
 	}
 	if m := CopyMessage("Ana", 70); !strings.Contains(m, "1 minute,") {
+		t.Fatal(m)
+	}
+	// Face not seen (camera may be on): no claim that the camera is off.
+	if m := CopyMessageFor("Kian Santos", 200, false); !strings.HasPrefix(m, "Hi Kian, we can't see your face") ||
+		strings.Contains(m, "has been off") {
+		t.Fatal(m)
+	}
+	if m := CopyMessageFor("Kian", 130, true); !strings.Contains(m, "has been off for 2 minutes") {
 		t.Fatal(m)
 	}
 	if got := Ellipsize(boxText{}, Font{Px: 10}, "A very long class name indeed", 60); !strings.HasSuffix(got, "…") ||

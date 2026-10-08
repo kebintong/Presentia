@@ -39,10 +39,12 @@ type liveStats struct {
 	LastAlert string  `json:"last_alert"`
 	LastLevel string  `json:"last_level"`
 	FrameSeq  int64   `json:"frame_seq"`
-	// Students recognised earlier but not on camera now, longest first.
+	// Students recognised earlier but not seen now, longest first. Kind is
+	// "cam_off" when their tile shows the camera-off picture, else "unseen".
 	Away []struct {
 		Name string  `json:"name"`
 		Away float64 `json:"away"`
+		Kind string  `json:"kind"`
 	} `json:"away"`
 }
 
@@ -157,7 +159,7 @@ func fmtElapsed(sec float64) string {
 func liveSegs(st liveStats) []pipSeg {
 	segs := []pipSeg{{fmt.Sprintf("%d/%d present", st.Present, st.Total), segPresent}}
 	if st.Missing > 0 {
-		segs = append(segs, pipSeg{fmt.Sprintf("%d missing", st.Missing), segMissing})
+		segs = append(segs, pipSeg{fmt.Sprintf("%d not seen", st.Missing), segMissing})
 	}
 	if st.Unknown > 0 {
 		segs = append(segs, pipSeg{fmt.Sprintf("%d unknown", st.Unknown), segUnknown})
@@ -171,7 +173,7 @@ func trayTipText(st liveStats) string {
 	}
 	t := fmt.Sprintf("Presentia — monitoring %s · %d/%d present", fmtElapsed(st.Elapsed), st.Present, st.Total)
 	if st.Missing > 0 {
-		t += fmt.Sprintf(" · %d missing", st.Missing)
+		t += fmt.Sprintf(" · %d not seen", st.Missing)
 	}
 	if st.Unknown > 0 {
 		t += fmt.Sprintf(" · %d unknown", st.Unknown)

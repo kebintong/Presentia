@@ -23,17 +23,28 @@ class FaceObs:
     shared_tile: bool = False
 
 
+# What a student's own meeting tile shows (app.core.meet_tiles), when known.
+TILE_VIDEO = "video"     # live video: their camera is on
+TILE_AVATAR = "avatar"   # the meeting's camera-off picture
+
+
 @dataclass(frozen=True)
 class Observation:
     t: float                              # seconds (monotonic or epoch, consistently)
     capture_state: str = CAPTURE_OK       # ok | minimized | covered | closed | hidden | ...
     faces: tuple[FaceObs, ...] = ()
+    # (student_id, TILE_VIDEO | TILE_AVATAR) for students whose remembered
+    # tile could be read in this pass. A face that is not recognised is not
+    # proof the camera is off; only TILE_AVATAR is.
+    tiles: tuple[tuple[int, str], ...] = ()
 
 
 # Per-student states (plan section 4).
 NOT_ARRIVED = "not_arrived"
 ARRIVING = "arriving"
 PRESENT = "present"
+UNCLEAR = "unclear"            # on camera (live tile), face not recognised: counts as here
+UNSEEN = "unseen"              # face not seen, and nothing shows whether the camera is on
 RECOVERING = "recovering"      # video moving again after a freeze; settling
 FROZEN = "frozen"
 DISCONNECTED = "disconnected"

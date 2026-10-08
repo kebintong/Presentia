@@ -47,10 +47,13 @@ func Ellipsize(t Text, f Font, s string, w float64) string {
 
 // ── what the bubble shows ────────────────────────────────────────────────────
 
-// Student is someone not on camera, and for how long (seconds).
+// Student is someone not seen now, and for how long (seconds). CamOff:
+// their meeting tile shows the camera-off picture (otherwise their face
+// is just not seen — the camera may be on with the face out of view).
 type Student struct {
-	Name string
-	Away float64
+	Name   string
+	Away   float64
+	CamOff bool
 }
 
 // View is everything the bubble shows. The Windows side fills it from the
@@ -63,7 +66,7 @@ type View struct {
 	Present, Missing, Waiting, Total, Unknown int
 	Away                                      []Student
 
-	SourceKind   string // "", "area" or "window"
+	SourceKind   string // "", "area", "window" or "tab"
 	SourceLabel  string
 	SourceDetail string
 
@@ -125,6 +128,20 @@ func CopyMessage(name string, away float64) string {
 	}
 	return fmt.Sprintf("Hi %s, please turn your camera on. Presentia shows it has been off for %d minute%s, "+
 		"and attendance needs your face on screen.", first, m, s)
+}
+
+// CopyMessageFor is the reminder for a student whose camera is off (camOff)
+// or whose face is just not seen (same wording as attendance/messages.py).
+func CopyMessageFor(name string, away float64, camOff bool) string {
+	if camOff {
+		return CopyMessage(name, away)
+	}
+	first := "there"
+	if f := strings.Fields(name); len(f) > 0 {
+		first = f[0]
+	}
+	return fmt.Sprintf("Hi %s, we can't see your face on camera. Please check your camera is on and your "+
+		"face is in the picture — attendance needs your face on screen.", first)
 }
 
 // warnLevel is the camera-off warning a stretch of `away` seconds has reached
@@ -423,7 +440,7 @@ func RenderPanel(v View, th Theme, t Text, s float64) *Layout {
 		}
 		bodyH += 8*s + 36*s
 	} else {
-		bodyH = 16*s + 6*s + 50*s + 10*s + 34*s + 10*s + 40*s
+		bodyH = 16*s + 6*s + 50*s + 10*s + 34*s + 8*s + 34*s + 10*s + 40*s
 	}
 	h := headH + pad + bodyH + pad + footH
 
@@ -526,7 +543,7 @@ func (p *painter) idleBody(bx0, bx1, y float64, hits *[]Hit) float64 {
 	ib := 30 * s
 	ix := bx0 + 10*s
 	iy := y + (rh-ib)/2
-	icon, l1, l2 := "area", "Nothing picked yet", "Video tiles or the meeting window"
+	icon, l1, l2 := "area", "Nothing picked yet", "Meeting tab, window or tiles"
 	if v.SourceKind != "" {
 		icon, l1, l2 = v.SourceKind, v.SourceLabel, v.SourceDetail
 		c.RoundRect(ix, iy, ix+ib, iy+ib, p.r(8), th.Accent, 0.18)
@@ -546,6 +563,14 @@ func (p *painter) idleBody(bx0, bx1, y float64, hits *[]Hit) float64 {
 
 	gap := 8 * s
 	mid := (bx0 + bx1) / 2
+	// A shared browser tab keeps going while the instructor uses other apps
+	// (a covered browser window stops updating), so it comes first.
+	tabL := "Share a browser tab"
+	if v.SourceKind == "tab" {
+		tabL = "Change browser tab"
+	}
+	p.button("tab", "sub", "tab", tabL, bx0, y, bx1, y+34*s, false, hits)
+	y += 34*s + 8*s
 	areaL, winL := "Screen area", "Window"
 	if v.SourceKind == "area" {
 		areaL = "Change area"
@@ -567,7 +592,7 @@ func (p *painter) liveBody(bx0, bx1, y float64, hits *[]Hit) float64 {
 		label string
 		col   RGB
 	}{
-		{v.Present, "HERE", th.OK}, {v.Missing, "CAM OFF", th.Warn},
+		{v.Present, "HERE", th.OK}, {v.Missing, "NOT SEEN", th.Warn},
 		{v.Waiting, "NOT YET", th.Muted}, {v.Unknown, "UNKNOWN", th.Icon},
 	}
 	gap := 6 * s
@@ -596,7 +621,7 @@ func (p *painter) liveBody(bx0, bx1, y float64, hits *[]Hit) float64 {
 		t.Draw(c, Font{12 * s, true}, "Everyone seen is on camera", bx0+21*s, y, bx1, y+24*s, Left, th.Muted)
 		y += 24 * s
 	} else {
-		p.label("Not on camera", bx0, y, bx1-bx0)
+		p.label("Not seen", bx0, y, bx1-bx0)
 		y += 16*s + 6*s
 		for i, st := range v.Away {
 			if i >= MaxRows {
@@ -620,15 +645,17 @@ func (p *painter) liveBody(bx0, bx1, y float64, hits *[]Hit) float64 {
 				c.Icon("copy", bx+6*s, cy-7*s, 14*s, 1.8*s, th.Icon)
 			}
 			*hits = append(*hits, Hit{id, bx, cy - bsz/2, bx1, cy + bsz/2})
-			// chip: warning level and time away
-			lvl := warnLevel(st.Away)
+			// chip: time away; warning level once the camera is known to be off
 			label := Clock(st.Away)
 			bg, fg := th.Sub.First(), th.Muted
-			if lvl >= 1 {
-				label = fmt.Sprintf("W%d · %s", min(lvl, 3), Clock(st.Away))
-				bg, fg = th.W1Bg, th.W1Fg
-				if lvl >= 2 {
-					bg, fg = th.W2Bg, th.W2Fg
+			if st.CamOff {
+				label = "Cam off · " + Clock(st.Away)
+				if lvl := warnLevel(st.Away); lvl >= 1 {
+					label = fmt.Sprintf("W%d · %s", min(lvl, 3), Clock(st.Away))
+					bg, fg = th.W1Bg, th.W1Fg
+					if lvl >= 2 {
+						bg, fg = th.W2Bg, th.W2Fg
+					}
 				}
 			}
 			cwid := p.chip(label, bx-8*s, cy, bg, fg, th.OutlinedChips)

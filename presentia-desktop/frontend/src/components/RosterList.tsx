@@ -7,10 +7,14 @@ interface RosterListProps {
   verifyingId?: number | null
 }
 
-const STATE_LABEL: Record<RosterStudent['state'], string> = {
-  present: 'PRESENT',
-  missing: 'MISSING',
-  waiting: 'waiting',
+// Label, badge style and explanation for each state (app/core/roster_monitor.py).
+const STATE: Record<RosterStudent['state'], { label: string; badge: string; title: string }> = {
+  present: { label: 'PRESENT', badge: 'present', title: 'Recognised on camera' },
+  unclear: { label: 'ON CAMERA', badge: 'present', title: 'Their camera is on, but the face is not clear (turned or partly out of view). Counted as present.' },
+  unseen:  { label: 'NOT SEEN', badge: 'warn', title: 'Their face has not been seen for a while. Their camera may be off, or they are out of view.' },
+  cam_off: { label: 'CAMERA OFF', badge: 'missing', title: 'Their tile shows the meeting\'s camera-off picture.' },
+  missing: { label: 'MISSING', badge: 'missing', title: 'Not seen on screen' },
+  waiting: { label: 'waiting', badge: 'waiting', title: 'Not seen yet in this meeting' },
 }
 
 export default function RosterList({ students, onStudentClick, verifyingId }: RosterListProps) {
@@ -55,7 +59,10 @@ export default function RosterList({ students, onStudentClick, verifyingId }: Ro
                 <path d="M20 6L9 17l-5-5" />
               </svg>
             )}
-            <span className={`badge badge-${s.state}`}>{STATE_LABEL[s.state]}</span>
+            <span className={`badge badge-${(STATE[s.state] ?? STATE.waiting).badge}`}
+                  title={(STATE[s.state] ?? STATE.waiting).title}>
+              {(STATE[s.state] ?? STATE.waiting).label}
+            </span>
           </div>
         </button>
       ))}

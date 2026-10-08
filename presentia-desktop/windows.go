@@ -8,16 +8,37 @@ import (
 )
 
 var (
-	user32                       = syscall.NewLazyDLL("user32.dll")
-	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
-	procEnumWindows              = user32.NewProc("EnumWindows")
-	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
-	procGetWindowRect            = user32.NewProc("GetWindowRect")
-	procIsWindowVisible          = user32.NewProc("IsWindowVisible")
-	procGetWindowLongW           = user32.NewProc("GetWindowLongW")
-	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
-	procGetCurrentProcessId      = kernel32.NewProc("GetCurrentProcessId")
+	user32                         = syscall.NewLazyDLL("user32.dll")
+	kernel32                       = syscall.NewLazyDLL("kernel32.dll")
+	procEnumWindows                = user32.NewProc("EnumWindows")
+	procGetWindowTextW             = user32.NewProc("GetWindowTextW")
+	procGetWindowRect              = user32.NewProc("GetWindowRect")
+	procIsWindowVisible            = user32.NewProc("IsWindowVisible")
+	procGetWindowLongW             = user32.NewProc("GetWindowLongW")
+	procGetWindowThreadProcessId   = user32.NewProc("GetWindowThreadProcessId")
+	procGetCurrentProcessId        = kernel32.NewProc("GetCurrentProcessId")
+	procOpenProcess                = kernel32.NewProc("OpenProcess")
+	procQueryFullProcessImageNameW = kernel32.NewProc("QueryFullProcessImageNameW")
+	procCloseHandle                = kernel32.NewProc("CloseHandle")
 )
+
+const processQueryLimitedInformation = 0x1000
+
+// processPath is the full path of a process's program, or "".
+func processPath(pid uint32) string {
+	h, _, _ := procOpenProcess.Call(processQueryLimitedInformation, 0, uintptr(pid))
+	if h == 0 {
+		return ""
+	}
+	defer procCloseHandle.Call(h)
+	buf := make([]uint16, 1024)
+	size := uint32(len(buf))
+	ok, _, _ := procQueryFullProcessImageNameW.Call(h, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
+	if ok == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:size])
+}
 
 type rect struct{ Left, Top, Right, Bottom int32 }
 
@@ -71,13 +92,16 @@ func enumWindows() []WindowInfo {
 			return 1
 		}
 
+		exe := processPath(winPID)
 		results = append(results, WindowInfo{
-			Title:  title,
-			Left:   int(r.Left),
-			Top:    int(r.Top),
-			Width:  w,
-			Height: h,
-			Hwnd:   uint64(hwnd),
+			Title:   title,
+			Left:    int(r.Left),
+			Top:     int(r.Top),
+			Width:   w,
+			Height:  h,
+			Hwnd:    uint64(hwnd),
+			Exe:     exe,
+			Browser: browserName(exe),
 		})
 		return 1 // continue enumeration
 	})

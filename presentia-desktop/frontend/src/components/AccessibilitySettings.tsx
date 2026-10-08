@@ -5,6 +5,7 @@ const API = 'http://127.0.0.1:7788'
 interface Checks {
   random_challenges: boolean
   antispoof: boolean
+  learn_faces: boolean
   profile: 'low' | 'balanced' | 'high'
 }
 
@@ -96,6 +97,21 @@ export default function AccessibilitySettings() {
         </div>
         {toggle('Photo and screen-replay detection', !!checks?.antispoof,
           () => save({ antispoof: !checks?.antispoof }))}
+      </div>
+
+      <span className="field-label" style={{ marginTop: 14 }}>Meeting Monitor</span>
+
+      <div className="settings-row">
+        <div>
+          <div className="settings-row-title">Learn how students look in meetings</div>
+          <div className="settings-row-sub">
+            When a student is recognised clearly during a meeting, Presentia keeps that picture of
+            their face (up to five per student, on this computer only) so they are still recognised
+            when their face is turned or half out of view. Deleting a student deletes these too.
+          </div>
+        </div>
+        {toggle('Learn how students look in meetings', checks?.learn_faces !== false,
+          () => save({ learn_faces: !(checks?.learn_faces !== false) }))}
       </div>
 
       {error && <div className="settings-msg settings-msg-error">{error}</div>}

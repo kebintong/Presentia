@@ -28,6 +28,8 @@ export function OpenDownloadPage(arg1:string):Promise<void>;
 
 export function OpenImageFilesDialog():Promise<Array<string>>;
 
+export function OpenInBrowser(arg1:string,arg2:string):Promise<void>;
+
 export function PipClose():Promise<void>;
 
 export function PipFrame(arg1:string):Promise<void>;

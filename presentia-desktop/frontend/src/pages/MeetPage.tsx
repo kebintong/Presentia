@@ -11,6 +11,7 @@ import { setBubbleHandler, rememberSource, rememberedSource, tellBubbleSource, t
 import { useMonitor, monitorFeed, addMonitorAlert, startMonitor, sendMonitor, stopMonitor, setMonitorPageHandler } from '../monitorSession'
 import { ClassInfo, classLabel } from '../classes'
 import VerifyDialog, { CheckState, VerifyStudent, newCheck } from '../components/VerifyDialog'
+import TabShareDialog from '../components/TabShareDialog'
 
 const API = 'http://127.0.0.1:7788'
 // Bindings added after the generated wailsjs files; called defensively.
@@ -34,6 +35,11 @@ interface UnknownFace {
 
 interface EnrollDialog {
   unknown: UnknownFace
+  /** "This is…" an existing student, or a new one. */
+  mode: 'assign' | 'new'
+  studentId: number | null
+  /** Set when the face looks more like someone else: asks to confirm. */
+  check: string
   studentNo: string
   name: string
 }
@@ -45,9 +51,13 @@ interface WindowInfo {
   width: number
   height: number
   hwnd?: number
+  exe?: string
+  /** Browser name when the window is a web browser (Chrome, Edge, Brave…). */
+  browser?: string
 }
 
-/** What to monitor: a fixed screen area, or a window (followed as it moves). */
+/** What to monitor: a fixed screen area, a window (followed as it moves), or
+ *  a browser tab shared with Presentia (keeps going in the background). */
 interface Region {
   left: number
   top: number
@@ -55,6 +65,9 @@ interface Region {
   height: number
   hwnd?: number
   title?: string
+  tab?: boolean
+  /** The window is a browser, which stops drawing when covered. */
+  browser?: boolean
 }
 
 /** What is remembered between visits to the page. */
@@ -77,7 +90,12 @@ const PAUSED_CAPTURE: Record<string, string> = {
   closed: 'window closed',
   hidden: 'window fully covered',
   covered: 'window covered',
+  tab_waiting: 'waiting for the shared tab',
+  tab_stopped: 'tab sharing stopped',
+  tab_stale: 'shared tab not updating',
 }
+
+const TAB_DETAIL = 'Shared from your browser — keeps going while you use other apps'
 
 // Crop the picked part of the picker's screenshot into a small JPEG
 // (fractions of the picture, so the screenshot's own scale does not matter).
@@ -133,6 +151,8 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
   // Win picker dialog
   const [showWinPicker, setShowWinPicker] = useState(false)
   const [openWindows, setOpenWindows]     = useState<WindowInfo[]>([])
+  // Share a browser tab (TabShareDialog)
+  const [showTabShare, setShowTabShare]   = useState(false)
 
   // In-app screen picker overlay state
   const [screenshot, setScreenshot]   = useState<ScreenShot | null>(null)
@@ -153,6 +173,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
     switch (cmd) {
       case 'screen_area': pickRegionFn(); break
       case 'win_picker':  openWinPickerFn(); break
+      case 'tab_share':   openTabShare(); break
       case 'launch':      startMonitoringFn(); break
       case 'stop':        stopMonitoring(); break
       case 'quit':        CloseBubble(); setBubbleOpen(false); break
@@ -177,6 +198,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
     rememberSource<Source>(region ? { region, thumb: regionThumb } : null)
     const cls = classLabel(classInfo)
     if (!region) tellBubbleSource('', '', '', cls)
+    else if (region.tab) tellBubbleSource('tab', region.title || 'Browser tab', TAB_DETAIL, cls)
     else if (region.hwnd) tellBubbleSource('window', region.title || 'Selected window', 'Followed when it moves or is covered', cls)
     else tellBubbleSource('area', 'Screen area', `${region.width} × ${region.height} px at ${region.left}, ${region.top}`, cls)
   }, [region, regionThumb, classInfo])
@@ -279,7 +301,33 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
     addAlert(`Screen area selected: ${region.width}×${region.height}`, 'info')
   }
 
-  const clearSource = () => { setRegion(null); setRegionThumb(null) }
+  const clearSource = () => {
+    if (region?.tab) fetch(`${API}/api/tabshare/stop`, { method: 'POST' }).catch(() => {})
+    setRegion(null); setRegionThumb(null)
+  }
+
+  // ── Browser tab ───────────────────────────────────────────────────
+  const openTabShare = async () => {
+    try { setOpenWindows((await GetOpenWindows()) || []) } catch { setOpenWindows([]) }
+    setShowWinPicker(false)
+    setShowTabShare(true)
+  }
+
+  const closeTabShare = () => {
+    setShowTabShare(false)
+    goApp()?.['BubbleTaskDone']?.()
+  }
+
+  // Watch the shared tab; while monitoring, switch to it without stopping.
+  const useTab = (label: string) => {
+    const r: Region = { left: 0, top: 0, width: 0, height: 0, tab: true, title: label }
+    setRegion(r)
+    setRegionThumb(null)
+    if (monitoring) sendWs({ action: 'switch_source', region: r })
+    sourcePicked(`Browser tab selected: "${label}". Press Start on the bubble or in Presentia.`)
+    addAlert(`Browser tab selected: "${label}" — it keeps being monitored while you use other apps.`, 'info')
+    closeTabShare()
+  }
 
   // ── Windows Tab picker ────────────────────────────────────────────
   const openWinPickerFn = async () => {
@@ -302,10 +350,16 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
   const selectWindow = (w: WindowInfo) => {
     // The window handle lets the sidecar follow the window if it is moved
     // or resized while monitoring.
-    setRegion({ left: w.left, top: w.top, width: w.width, height: w.height, hwnd: w.hwnd, title: w.title })
+    const r: Region = { left: w.left, top: w.top, width: w.width, height: w.height, hwnd: w.hwnd, title: w.title,
+                        browser: !!w.browser }
+    setRegion(r)
+    if (monitoring) sendWs({ action: 'switch_source', region: r })
     setRegionThumb(null)
     sourcePicked(`Window selected: "${w.title}". Press Start on the bubble or in Presentia.`)
-    addAlert(`Window selected: "${w.title}" — it stays monitored when moved or covered by other windows (not when minimised).`, 'info')
+    addAlert(w.browser
+      ? `Window selected: "${w.title}". A browser stops drawing a window that is fully covered or minimised — use Browser tab to keep monitoring while you use other apps.`
+      : `Window selected: "${w.title}" — it stays monitored when moved or covered by other windows (not when minimised).`,
+      w.browser ? 'warn' : 'info')
     closeWinPicker()
   }
 
@@ -349,6 +403,10 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
             secondsLeft: data.seconds_left, result: data.result,
             phase: data.result ? 'done' : 'running' }
         : c)
+    } else if (data.type === 'assign_check') {
+      setEnrollDialog((d) => d && d.unknown.uid === data.uid ? { ...d, check: data.message } : d)
+    } else if (data.type === 'assigned' || data.type === 'enrolled') {
+      setEnrollDialog(null)
     } else if (data.type === 'stopped') {
       setCheck(null)
     } else if (data.type === 'error') {
@@ -357,11 +415,23 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
     }
   }), [])
 
-  const enrollUnknown = (u: UnknownFace) => setEnrollDialog({ unknown: u, studentNo: '', name: '' })
+  // Clicking an unknown face: most often a student on the roster whose
+  // registration photo looks different ("This is…"), sometimes a new one.
+  const enrollUnknown = (u: UnknownFace) => setEnrollDialog({
+    unknown: u, mode: roster.length ? 'assign' : 'new', studentId: null, check: '', studentNo: '', name: '',
+  })
 
-  const submitEnroll = () => {
+  const submitEnroll = (confirm = false) => {
     if (!enrollDialog) return
-    const { unknown, studentNo, name } = enrollDialog
+    const { unknown, studentNo, name, mode, studentId } = enrollDialog
+    if (mode === 'assign') {
+      if (studentId == null) return
+      if (!sendWs({ action: 'assign_unknown', uid: unknown.uid, student_id: studentId, confirm })) {
+        addAlert('Not connected to the monitor.', 'error')
+        setEnrollDialog(null)
+      }
+      return  // closes on "assigned", or asks to confirm ("assign_check")
+    }
     if (!studentNo.trim() || !name.trim()) return
     // uid identifies the exact face that was clicked; the list position can
     // have shifted by the time this message arrives.
@@ -444,6 +514,12 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                 Keep monitoring
               </button>
             )}
+            {monitoring && capture && PAUSED_CAPTURE[capture.state] && (capture.browser || region?.browser || region?.tab) && (
+              <button className="btn-primary" onClick={openTabShare}
+                      title="Share the meeting tab: it keeps updating while you use other apps">
+                {region?.tab ? 'Share the tab again' : 'Use browser tab instead'}
+              </button>
+            )}
             {/* Open / Close Bubble button */}
             {!bubbleOpen ? (
               <button className="btn-hero-launch" onClick={() => { OpenBubble(); setBubbleOpen(true) }}
@@ -470,8 +546,9 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
             <circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>
           </svg>
           <span>
-            Pick what to watch with <strong>Screen Area</strong> or <strong>Select Window</strong>, then
-            press <strong>Start Monitoring</strong>. <strong>Open Bubble</strong> puts the same controls in a
+            Pick what to watch — <strong>Browser Tab</strong> for a meeting in Chrome, Edge or Brave (keeps
+            going while you use other apps), <strong>Select Window</strong> for the Zoom or Teams app, or
+            <strong> Screen Area</strong> — then press <strong>Start Monitoring</strong>. <strong>Open Bubble</strong> puts the same controls in a
             floating circle that stays above Google Meet while you teach. Click a student in the roster
             to run a liveness check if their video looks suspicious.
           </span>
@@ -482,11 +559,13 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
       <section className={`launcher-card source-card ${region ? 'has-source' : 'no-source'} ${monitoring ? 'is-live' : ''}`}
                aria-label="What Presentia watches">
         <div className="source-preview" aria-hidden="true">
-          {region && !region.hwnd && regionThumb
+          {region && !region.hwnd && !region.tab && regionThumb
             ? <img src={regionThumb} alt="" />
             : (
               <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                {region?.hwnd
+                {region?.tab
+                  ? <><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></>
+                  : region?.hwnd
                   ? <><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M2 7h20"/><path d="M8 21h8"/><path d="M12 17v4"/></>
                   : <><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/></>}
               </svg>
@@ -499,29 +578,40 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
           {region ? (
             <>
               <div className="source-title">
-                {region.hwnd ? (region.title || 'Selected window') : 'Screen area'}
+                {region.tab ? (region.title || 'Browser tab') : region.hwnd ? (region.title || 'Selected window') : 'Screen area'}
               </div>
               <div className="source-sub">
-                {region.hwnd
-                  ? 'Followed when it moves, even behind other windows (not when minimised)'
+                {region.tab
+                  ? TAB_DETAIL
+                  : region.hwnd
+                  ? (region.browser
+                    ? 'A browser stops drawing this window when it is fully covered — Browser Tab keeps going'
+                    : 'Followed when it moves, even behind other windows (not when minimised)')
                   : `${region.width} × ${region.height} px at ${region.left}, ${region.top}`}
               </div>
             </>
           ) : (
             <div className="source-sub">
-              Drag over the meeting's video tiles, or pick the Meet / Zoom / Teams window.
+              Share the meeting's browser tab, pick the Zoom / Teams window, or drag over the video tiles.
             </div>
           )}
         </div>
         <div className="source-actions">
           {!monitoring && (
             <>
+              <button className={region?.tab ? 'btn-ghost' : 'btn-ghost source-recommended'} onClick={openTabShare}
+                      title="Recommended for Google Meet, Zoom or Teams in Chrome, Edge or Brave">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                </svg>
+                {region?.tab ? 'Change Tab' : 'Browser Tab'}
+              </button>
               <button className="btn-ghost" onClick={pickRegionFn} disabled={pickLoading}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
                   <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
                 </svg>
-                {pickLoading ? 'Capturing…' : region && !region.hwnd ? 'Change Area' : 'Screen Area'}
+                {pickLoading ? 'Capturing…' : region && !region.hwnd && !region.tab ? 'Change Area' : 'Screen Area'}
               </button>
               <button className="btn-ghost" onClick={openWinPickerFn}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -547,7 +637,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
             </button>
           ) : (
             <button className="btn-primary source-start" onClick={startMonitoringFn} disabled={!region}
-                    title={region ? undefined : 'Choose a screen area or a window first'}>
+                    title={region ? undefined : 'Choose a browser tab, a window or a screen area first'}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polygon points="5 3 19 12 5 21 5 3"/>
               </svg>
@@ -581,7 +671,10 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                 value={sessionName} onChange={(e) => setSessionName(e.target.value)} disabled={monitoring}/>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <span className="field-label" style={{ margin: 0 }}>Alert after missing</span>
+              <span className="field-label" style={{ margin: 0 }}
+                    title="A student whose tile shows the camera-off picture this long is marked Camera off. A face that is only not recognised is marked Not seen after 30 seconds.">
+                Camera-off alert after
+              </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <input type="number" min={2} max={60} value={missingAfter}
                   onChange={(e) => setMissingAfter(Number(e.target.value))}
@@ -624,13 +717,13 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
             )}
             {unknowns.length > 0 && (
               <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--card-row-bg)', border: '1px solid var(--border-subtle)' }}>
-                <span className="field-label" style={{ marginBottom: 6 }}>Unknown Faces — Click to Enroll</span>
+                <span className="field-label" style={{ marginBottom: 6 }}>Unknown Faces — Click to Say Who It Is</span>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   {unknowns.map((u, i) => (
                     <button key={i} onClick={() => enrollUnknown(u)}
                       style={{ width: 56, height: 56, borderRadius: 10, overflow: 'hidden',
                         border: '2px solid var(--accent)', padding: 0, cursor: 'pointer' }}
-                      title="Click to register this face">
+                      title="Click to say which student this is, or register them">
                       <img src={`data:image/jpeg;base64,${u.crop_jpeg}`} alt={`Unknown ${i+1}`}
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}/>
                     </button>
@@ -644,9 +737,9 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity={0.35}>
                   <circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>
                 </svg>
-                <p style={{ fontSize: 13, textAlign: 'center', maxWidth: 240 }}>
-                  Choose <strong>Screen Area</strong> or <strong>Select Window</strong> above to tell Presentia
-                  which part of the meeting to watch.
+                <p style={{ fontSize: 13, textAlign: 'center', maxWidth: 260 }}>
+                  Choose <strong>Browser Tab</strong>, <strong>Select Window</strong> or <strong>Screen Area</strong>{' '}
+                  above to tell Presentia which part of the meeting to watch.
                 </p>
               </div>
             )}
@@ -674,6 +767,14 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
               </div>
               <button className="btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={closeWinPicker}>✕</button>
             </div>
+            {openWindows.some((w) => w.browser) && (
+              <div className="win-picker-hint">
+                <span>Meeting in a browser? <strong>Share the tab</strong> instead — a covered browser window stops updating.</span>
+                <button className="btn-primary" style={{ padding: '6px 12px', fontSize: 12, flexShrink: 0 }} onClick={openTabShare}>
+                  Browser Tab
+                </button>
+              </div>
+            )}
             <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
               {openWindows.length === 0
                 ? <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>No windows found</div>
@@ -686,6 +787,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                       <rect x="2" y="3" width="20" height="14" rx="2"/>
                     </svg>
                     <span style={{ flex: 1, fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.title}</span>
+                    {w.browser && <span className="win-chip" title="Stops updating when fully covered or minimised">{w.browser}</span>}
                     <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace', flexShrink: 0 }}>{w.width}×{w.height}</span>
                   </button>
                 ))
@@ -736,27 +838,73 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
         <VerifyDialog check={check} onStart={startCheck} onQuickCheck={quickCheck} onClose={closeCheck} />
       )}
 
-      {/* ── Enroll Unknown Face Modal ─────────────────────────────────── */}
+      {showTabShare && (
+        <TabShareDialog windows={openWindows} onUse={useTab} onClose={closeTabShare} />
+      )}
+
+      {/* ── Unknown face: "This is…" or a new student ─────────────────── */}
       {enrollDialog && (
         <div className="modal-scrim">
-          <div className="launcher-card" style={{ width: 340, maxWidth: 'calc(100vw - 32px)', padding: 24, gap: 16 }}>
-            <h3 style={{ fontSize: 16, color: 'var(--ink-heading)' }}>Enroll Face from Meeting</h3>
+          <div className="launcher-card" style={{ width: 380, maxWidth: 'calc(100vw - 32px)', padding: 24, gap: 14 }}>
+            <h3 style={{ fontSize: 16, color: 'var(--ink-heading)' }}>Who is this?</h3>
             <img src={`data:image/jpeg;base64,${enrollDialog.unknown.crop_jpeg}`} alt="Face"
               style={{ width: '100%', height: 140, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--border-subtle)' }}/>
-            <div>
-              <label className="field-label">Student ID Number</label>
-              <input className="input" placeholder="e.g. 2024-00123" value={enrollDialog.studentNo}
-                onChange={(e) => setEnrollDialog((d) => d ? { ...d, studentNo: e.target.value } : d)}/>
+            <div className="segmented" role="tablist">
+              <button className={enrollDialog.mode === 'assign' ? 'on' : ''} disabled={!roster.length}
+                onClick={() => setEnrollDialog((d) => d ? { ...d, mode: 'assign', check: '' } : d)}>
+                A student in this class
+              </button>
+              <button className={enrollDialog.mode === 'new' ? 'on' : ''}
+                onClick={() => setEnrollDialog((d) => d ? { ...d, mode: 'new', check: '' } : d)}>
+                New student
+              </button>
             </div>
-            <div>
-              <label className="field-label">Full Name</label>
-              <input className="input" placeholder="e.g. Juan Dela Cruz" value={enrollDialog.name}
-                onChange={(e) => setEnrollDialog((d) => d ? { ...d, name: e.target.value } : d)}/>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn-primary" style={{ flex: 1 }} onClick={submitEnroll}>Enroll Student</button>
-              <button className="btn-ghost" style={{ flex: 1 }} onClick={() => setEnrollDialog(null)}>Cancel</button>
-            </div>
+            {enrollDialog.mode === 'assign' ? (
+              <>
+                <div className="check-muted">
+                  Their registration photo may look different from how they look in the meeting. Pick who
+                  this is: this face is added to their record, so they are recognised from now on.
+                </div>
+                <div className="assign-list">
+                  {[...roster].sort((a, b) => Number(a.state === 'present') - Number(b.state === 'present') || a.name.localeCompare(b.name))
+                    .map((st) => (
+                      <button key={st.id} className={`assign-row ${enrollDialog.studentId === st.id ? 'selected' : ''}`}
+                        onClick={() => setEnrollDialog((d) => d ? { ...d, studentId: st.id, check: '' } : d)}>
+                        <span>{st.name}</span>
+                        <small>{st.state === 'present' ? 'recognised now' : st.state === 'waiting' ? 'not seen yet'
+                          : st.state === 'unclear' ? 'on camera' : st.state === 'cam_off' ? 'camera off' : 'not seen'}</small>
+                      </button>
+                    ))}
+                </div>
+                {enrollDialog.check && <div className="check-note warn">{enrollDialog.check}</div>}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {enrollDialog.check ? (
+                    <button className="btn-primary" style={{ flex: 1 }} onClick={() => submitEnroll(true)}>Add anyway</button>
+                  ) : (
+                    <button className="btn-primary" style={{ flex: 1 }} disabled={enrollDialog.studentId == null}
+                      onClick={() => submitEnroll(false)}>This is them</button>
+                  )}
+                  <button className="btn-ghost" style={{ flex: 1 }} onClick={() => setEnrollDialog(null)}>Cancel</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label className="field-label">Student ID Number</label>
+                  <input className="input" placeholder="e.g. 2024-00123" value={enrollDialog.studentNo}
+                    onChange={(e) => setEnrollDialog((d) => d ? { ...d, studentNo: e.target.value } : d)}/>
+                </div>
+                <div>
+                  <label className="field-label">Full Name</label>
+                  <input className="input" placeholder="e.g. Juan Dela Cruz" value={enrollDialog.name}
+                    onChange={(e) => setEnrollDialog((d) => d ? { ...d, name: e.target.value } : d)}/>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn-primary" style={{ flex: 1 }} onClick={() => submitEnroll()}>Enroll Student</button>
+                  <button className="btn-ghost" style={{ flex: 1 }} onClick={() => setEnrollDialog(null)}>Cancel</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

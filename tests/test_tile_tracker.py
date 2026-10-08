@@ -30,9 +30,12 @@ class FakeEngine:
 
     def __init__(self):
         self.faces: list[tuple[tuple, np.ndarray]] = []
+        self.scores: dict[tuple, float] = {}
 
-    def detect_faces(self, frame):
-        return [(bbox, 0.9, None) for bbox, _ in self.faces]
+    def detect_faces(self, frame, source="meeting", min_score=None):
+        cut = 0.5 if min_score is None else min_score
+        return [(bbox, self.scores.get(bbox, 0.9), None) for bbox, _ in self.faces
+                if self.scores.get(bbox, 0.9) >= cut]
 
     def embed_face(self, frame, bbox, kps):
         for b, emb in self.faces:
@@ -129,3 +132,37 @@ def test_rank_top2_one_entry_per_student():
     known = KNOWN + [(KIAN, unit([0.9, 0.1, 0, 0]))]
     r = rank_top2(unit([1, 0, 0, 0]), known)
     assert r[0][0] == KIAN and r[1][0] != KIAN
+
+
+def test_weak_detection_at_a_tile_edge_keeps_its_student(monkeypatch):
+    """Kian's face slides to the bottom of his tile: the detector is less sure."""
+    tr, eng, clock = make(monkeypatch)
+    box = (100, 100, 200, 220)
+    run(tr, eng, [(box, mixed(KIAN, 0.7))], clock, 0)
+    low = (100, 300, 200, 400)
+    eng.scores[low] = 0.4
+    eng.faces = [(low, mixed(KIAN, 0.36))]
+    clock[0] = 5
+    matches, unknowns = tr.process(FRAME)                       # no tile information
+    assert ids(matches) == [] and not unknowns
+    matches, unknowns = tr.process(FRAME, edge=lambda b: True)  # at the tile's edge
+    assert ids(matches) == [KIAN] and not unknowns
+
+
+def test_weak_edge_detection_is_never_an_unknown_face(monkeypatch):
+    tr, eng, clock = make(monkeypatch)
+    low = (100, 300, 200, 400)
+    eng.scores[low] = 0.35
+    noise = unit([0.1, 0.1, 0.1, 1])
+    eng.faces = [(low, noise)]
+    matches, unknowns = tr.process(FRAME, edge=lambda b: True)
+    assert ids(matches) == [] and unknowns == []
+
+
+def test_clear_matches_are_offered_for_learning(monkeypatch):
+    tr, eng, clock = make(monkeypatch)
+    run(tr, eng, [((100, 100, 200, 220), mixed(KIAN, 0.75)), ((400, 100, 500, 220), mixed(ANA, 0.5))],
+        clock, 0)
+    clear = tr.take_clear()
+    assert [sid for sid, _, _ in clear] == [KIAN]      # Ana's 0.5 is a match, but not a clear one
+    assert tr.take_clear() == []

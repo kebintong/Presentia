@@ -137,16 +137,20 @@ class FaceEngine:
     # ------------------------------------------------------------------
 
     def detect_faces(
-        self, frame_bgr: np.ndarray, source: str = "meeting"
+        self, frame_bgr: np.ndarray, source: str = "meeting", min_score: float | None = None,
     ) -> list[tuple[tuple[int, int, int, int], float, np.ndarray]]:
         """Detection only (no identity embedding) — much cheaper per pass.
 
         Returns (bbox, det_score, keypoints) per face. `source` picks the
         detector: "meeting" (screen captures, many small faces), "camera"
         (a webcam, one close face) or "photo" (uploaded pictures).
+        `min_score` lowers the detector's own threshold, for faces cut off
+        by the edge of a meeting tile (the caller decides which to keep).
         """
         det = self.det_cam if source == "camera" else self.det_meet
-        return det.detect(frame_bgr)
+        if min_score is None:
+            return det.detect(frame_bgr)
+        return det.detect(frame_bgr, thresh=min_score)
 
     def embed_face(self, frame_bgr: np.ndarray, bbox: tuple, kps: np.ndarray) -> np.ndarray:
         """Identity embedding for one already-detected face."""

@@ -310,8 +310,10 @@ class SCRFD:
         self.thresh = thresh
         self._centers: dict = {}
 
-    def detect(self, img: np.ndarray, det_size: int | None = None) -> list[Detection]:
+    def detect(self, img: np.ndarray, det_size: int | None = None,
+               thresh: float | None = None) -> list[Detection]:
         size = det_size or self.det_size
+        thresh = self.thresh if thresh is None else thresh
         h, w = img.shape[:2]
         if h / w > 1.0:
             nh, nw = size, int(size / (h / w))
@@ -340,7 +342,7 @@ class SCRFD:
                 if self.anchors > 1:
                     centers = np.stack([centers] * self.anchors, axis=1).reshape((-1, 2))
                 self._centers[key] = centers
-            pos = np.where(sc >= self.thresh)[0]
+            pos = np.where(sc >= thresh)[0]
             scores_l.append(sc[pos])
             boxes_l.append(_distance2bbox(centers, bb)[pos])
             if kp is not None:
@@ -368,7 +370,9 @@ class YuNet:
         self._det = cv2.FaceDetectorYN.create(str(path), "", (320, 320), thresh, 0.3, 50)
         self._size = (0, 0)
 
-    def detect(self, img: np.ndarray, det_size: int | None = None) -> list[Detection]:
+    def detect(self, img: np.ndarray, det_size: int | None = None,
+               thresh: float | None = None) -> list[Detection]:
+        # The score threshold is fixed when the detector is created.
         h, w = img.shape[:2]
         k = min(1.0, (det_size or self.max_side) / max(h, w))
         small = cv2.resize(img, (int(w * k), int(h * k))) if k < 1.0 else img

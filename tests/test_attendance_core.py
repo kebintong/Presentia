@@ -24,11 +24,17 @@ def live_motion(t: float) -> float:
 
 
 class Sim:
-    """Drives a core through time. `script(t)` returns {student_id: motion or
-    None (face shown, motion unknown) or 'gone'} plus an optional capture state."""
+    """Drives a core through time. `script(t)` returns {student_id: motion,
+    or None (face shown, motion unknown), or "video" (their tile shows live
+    video but the face is not recognised), or "unknown" (nothing known about
+    them)}. Students left out show the meeting's camera-off picture in their
+    tile, unless `tiles=False` (then nothing is known about them)."""
 
-    def __init__(self, roster=ROSTER, rules: Rules | None = None, class_start: float = 0.0):
+    def __init__(self, roster=ROSTER, rules: Rules | None = None, class_start: float = 0.0,
+                 tiles: bool = True):
         self.core = AttendanceCore(dict(roster), class_start, rules or Rules())
+        self.roster = dict(roster)
+        self.tiles = tiles
         self.events = []
         self.t = class_start
 
@@ -36,9 +42,13 @@ class Sim:
         while self.t < until - 1e-9:
             self.t = round(self.t + step, 4)
             spec = faces(self.t) if callable(faces) else faces
+            shown = {sid: mo for sid, mo in spec.items() if mo not in ("video", "unknown")}
+            tiles = [(sid, "video") for sid, mo in spec.items() if mo == "video"]
+            if self.tiles:
+                tiles += [(sid, "avatar") for sid in self.roster if sid not in spec]
             obs = Observation(self.t, capture, tuple(
                 FaceObs(sid, motion=(live_motion(self.t) if mo == "live" else mo))
-                for sid, mo in spec.items()))
+                for sid, mo in shown.items()), tuple(tiles))
             self.events += self.core.observe(obs)
         return self
 
@@ -168,6 +178,51 @@ def test_freeze_then_recover_is_no_penalty():
     s.run(120, present(1))
     assert s.state(1) == "present"
     assert not s.all("off_cam", 1) and not s.all("off_cam_warning", 1)
+
+
+# ── Face not clear / not seen (no proof the camera is off) ───────────────────
+
+def test_half_face_with_a_live_tile_is_never_camera_off():
+    s = _arrived(Sim(), until=60)
+    s.run(60 + 20 * 60, {1: "video"})             # 20 minutes, face never clear
+    assert s.state(1) == "unclear"
+    kinds = s.kinds(1)
+    assert "off_cam" not in kinds and "off_cam_warning" not in kinds
+    assert kinds.count("face_unclear") == 1       # one gentle note after 10 minutes
+    assert s.core.snapshot(s.t)["counts"]["here"] == 1
+    final = {f.student_id: f for f in s.core.finish(s.t)}
+    assert final[1].status == "present"
+
+
+def test_face_not_seen_without_tile_information():
+    s = _arrived(Sim(tiles=False), until=60)
+    s.run(80, {})
+    assert s.state(1) == "present"                # 20 s: nothing yet
+    s.run(95, {})
+    assert s.state(1) == "unseen" and s.first("face_not_seen", 1)
+    s.run(60 + 170, {})
+    assert "off_cam" not in s.kinds(1)
+    s.run(60 + 190, {})                           # no sign of the camera for 3 min
+    off = s.first("off_cam", 1)
+    assert off.data.get("not_seen") and s.state(1) == "off_cam"
+    s.run(60 + 190 + 65, {})
+    assert s.first("off_cam_warning", 1).data["level"] == 1   # the ladder starts from zero
+
+
+def test_unseen_then_seen_again():
+    s = _arrived(Sim(tiles=False), until=60)
+    s.run(100, {})
+    s.run(102, present(1))
+    assert s.state(1) == "present" and s.first("face_seen", 1)
+
+
+def test_camera_back_on_but_face_not_clear():
+    s = _arrived(Sim(), until=100)
+    s.run(170, {})                                # camera-off tile: W1 at 160
+    assert s.all("off_cam_warning", 1)
+    s.run(175, {1: "video"})
+    back = s.first("back_on_cam", 1)
+    assert back.data.get("unclear") and s.state(1) == "unclear"
 
 
 def test_freeze_then_disconnect_and_back_within_grace():

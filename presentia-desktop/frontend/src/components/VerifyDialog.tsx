@@ -5,7 +5,7 @@ import { ClipboardSetText } from '../../wailsjs/runtime/runtime'
 export interface VerifyStudent {
   id: number
   name: string
-  state: 'present' | 'missing' | 'waiting'
+  state: 'present' | 'unclear' | 'unseen' | 'cam_off' | 'missing' | 'waiting'
   verified?: boolean
   /** Their video has barely changed for a while (photo / frozen feed?). */
   suspect?: boolean
@@ -63,7 +63,8 @@ export default function VerifyDialog({ check, onStart, onQuickCheck, onClose }: 
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const canStart = student.state === 'present'
+  // On camera (even with the face not clear) is enough to ask for the actions.
+  const canStart = student.state === 'present' || student.state === 'unclear'
 
   return (
     <Modal title={`Verify ${student.name}`} onClose={onClose} width={500}>

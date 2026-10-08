@@ -208,3 +208,24 @@ def test_messages():
     assert f.describe("screen_only", "ok")[1] == "warn"
     assert f.describe("closed", "ok")[1] == "error"
     assert "Keep monitoring" in f.describe("minimized", "ok")[0]
+
+
+def test_covered_browser_window_suggests_tab_sharing():
+    from app import sidecar
+
+    f = object.__new__(sidecar._WindowFollower)
+    f.title = "Meet - abc-defg-hij - Brave"
+    f.browser = True
+    assert "Browser tab" in f.describe("hidden", "ok")[0]
+    assert "Browser tab" in f.describe("minimized", "ok")[0]
+    f.browser = False
+    assert "Browser tab" not in f.describe("hidden", "ok")[0]
+
+
+def test_browser_windows_are_recognised_by_title(monkeypatch):
+    from app import sidecar
+
+    for title, want in (("Meet - abc - Google Chrome", True), ("Meet – x - Microsoft​ Edge", True),
+                        ("Meet - aic-ijui-fyo - Brave", True), ("Zoom Meeting", False)):
+        tail = title.rsplit(" - ", 1)[-1].replace("​", "").strip().lower()
+        assert any(tail.endswith(b) for b in sidecar._WindowFollower.BROWSERS) == want, title

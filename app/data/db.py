@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS events (
 # an auto-update can bring any older database forward without losing data.
 
 # Bump this together with a new entry in _MIGRATIONS.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Name of the class that existing students and sessions are moved into when a
 # database from before classes existed (v1.4.0 and older) is upgraded.
@@ -223,9 +223,29 @@ def _migrate_to_v2(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v3(conn: sqlite3.Connection) -> None:
+    """More than one picture of a face per student: the separate angles from
+    registration, faces the instructor assigned during a meeting ("This is…"),
+    and clear meeting faces Presentia learned from (Settings → Accessibility).
+    students.embedding stays the main face template."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS student_faces (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id  INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+            embedding   BLOB NOT NULL,
+            source      TEXT NOT NULL,          -- enrol | assigned | meeting
+            created_at  TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_student ON student_faces(student_id)")
+
+
 _MIGRATIONS = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
+    3: _migrate_to_v3,
 }
 
 
@@ -359,7 +379,7 @@ def delete_class(class_id: int) -> int:
 # website address, this install's website credentials, preferences) stay.
 _DATA_TABLES = (
     "events", "attendance", "sessions", "pending_students",
-    "class_students", "students", "classes",
+    "class_students", "student_faces", "students", "classes",
 )
 
 
@@ -418,8 +438,11 @@ def delete_all_data() -> dict:
 # ---------------------------------------------------------------- students
 
 def add_student(
-    student_no: str, name: str, embedding: np.ndarray, class_id: int | None = None
+    student_no: str, name: str, embedding: np.ndarray, class_id: int | None = None,
+    extra: list[np.ndarray] | None = None,
 ) -> int:
+    """`extra`: the separate registration pictures (angles) the main
+    template was averaged from; kept so a turned face still matches."""
     blob = embedding.astype(np.float32).tobytes()
     with _connect() as conn:
         now = _now()
@@ -428,6 +451,14 @@ def add_student(
             (student_no, name, blob, now),
         )
         student_id = cur.lastrowid
+        for e in (extra or [])[:MAX_ENROL_FACES]:
+            e = np.asarray(e, dtype=np.float32)
+            if e.size == embedding.size:
+                conn.execute(
+                    "INSERT INTO student_faces (student_id, embedding, source, created_at) "
+                    "VALUES (?, ?, 'enrol', ?)",
+                    (student_id, e.tobytes(), now),
+                )
         if class_id is not None:
             conn.execute(
                 "INSERT INTO class_students (class_id, student_id, added_at) VALUES (?, ?, ?)",
@@ -684,19 +715,72 @@ def get_student_embedding(student_id: int) -> np.ndarray | None:
     return np.frombuffer(row["embedding"], dtype=np.float32)
 
 
-def all_embeddings(class_id: int | None = None) -> list[tuple[int, np.ndarray]]:
+def all_embeddings(class_id: int | None = None, extra: bool = True) -> list[tuple[int, np.ndarray]]:
     """Face embeddings to match against — only one class's roster if given,
-    so a face is never recognised as a student from a different class."""
+    so a face is never recognised as a student from a different class.
+    With `extra`, each student's additional pictures (student_faces) too:
+    a student can appear more than once, and matching takes their best."""
     with _connect() as conn:
         if class_id is None:
             rows = conn.execute("SELECT id, embedding FROM students").fetchall()
+            more = conn.execute("SELECT student_id AS id, embedding FROM student_faces").fetchall() if extra else []
         else:
             rows = conn.execute(
                 "SELECT s.id, s.embedding FROM students s "
                 "JOIN class_students cs ON cs.student_id = s.id WHERE cs.class_id = ?",
                 (class_id,),
             ).fetchall()
-    return [(r["id"], np.frombuffer(r["embedding"], dtype=np.float32)) for r in rows]
+            more = conn.execute(
+                "SELECT f.student_id AS id, f.embedding FROM student_faces f "
+                "JOIN class_students cs ON cs.student_id = f.student_id WHERE cs.class_id = ?",
+                (class_id,),
+            ).fetchall() if extra else []
+    return [(r["id"], np.frombuffer(r["embedding"], dtype=np.float32)) for r in [*rows, *more]]
+
+
+# Extra pictures kept per student, by where they came from.
+MAX_ENROL_FACES = 6
+MAX_MEETING_FACES = 5
+MAX_ASSIGNED_FACES = 5
+
+
+def add_face(student_id: int, embedding: np.ndarray, source: str) -> int:
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO student_faces (student_id, embedding, source, created_at) VALUES (?, ?, ?, ?)",
+            (student_id, np.asarray(embedding, dtype=np.float32).tobytes(), source, _now()),
+        )
+        return cur.lastrowid
+
+
+def list_faces(student_id: int, source: str | None = None) -> list[tuple[int, np.ndarray, str]]:
+    """(face id, embedding, source) of a student's extra pictures, oldest first."""
+    with _connect() as conn:
+        if source is None:
+            rows = conn.execute(
+                "SELECT id, embedding, source FROM student_faces WHERE student_id = ? ORDER BY id",
+                (student_id,)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, embedding, source FROM student_faces WHERE student_id = ? AND source = ? "
+                "ORDER BY id", (student_id, source)).fetchall()
+    return [(r["id"], np.frombuffer(r["embedding"], dtype=np.float32), r["source"]) for r in rows]
+
+
+def replace_face(face_id: int, embedding: np.ndarray) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE student_faces SET embedding = ?, created_at = ? WHERE id = ?",
+                     (np.asarray(embedding, dtype=np.float32).tobytes(), _now(), face_id))
+
+
+def delete_faces(student_id: int, source: str | None = None) -> int:
+    with _connect() as conn:
+        if source is None:
+            cur = conn.execute("DELETE FROM student_faces WHERE student_id = ?", (student_id,))
+        else:
+            cur = conn.execute("DELETE FROM student_faces WHERE student_id = ? AND source = ?",
+                               (student_id, source))
+        return cur.rowcount
 
 
 def delete_student(student_id: int) -> None:

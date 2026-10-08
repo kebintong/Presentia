@@ -32,7 +32,7 @@ import (
 var (
 	gBubbleUIMu sync.Mutex
 	gThemeKey   = "dark"
-	gSrcKind    string // "", "area", "window"
+	gSrcKind    string // "", "area", "window", "tab"
 	gSrcLabel   string
 	gSrcDetail  string
 	gClassTitle string
@@ -169,7 +169,7 @@ func bubbleView() bubbleui.View {
 		PanelOpen: gPanelHwnd != 0 && gPanelAnim.dir >= 0, Hover: gPanelHover, Copied: gCopied,
 	}
 	for _, a := range st.Away {
-		v.Away = append(v.Away, bubbleui.Student{Name: a.Name, Away: a.Away})
+		v.Away = append(v.Away, bubbleui.Student{Name: a.Name, Away: a.Away, CamOff: a.Kind == "cam_off"})
 	}
 	return v
 }
@@ -669,6 +669,9 @@ func panelAction(id string) {
 	case id == "window":
 		closePanel()
 		emitBubbleCmd("bubble:win_picker")
+	case id == "tab":
+		closePanel()
+		emitBubbleCmd("bubble:tab_share")
 	case id == "start":
 		emitBubbleCmd("bubble:launch")
 	case id == "stop":
@@ -689,7 +692,7 @@ func panelAction(id string) {
 		st := liveSnapshot()
 		if i >= 0 && i < len(st.Away) {
 			a := st.Away[i]
-			if setClipboard(gPanelHwnd, bubbleui.CopyMessage(a.Name, a.Away)) {
+			if setClipboard(gPanelHwnd, bubbleui.CopyMessageFor(a.Name, a.Away, a.Kind == "cam_off")) {
 				gCopied = id
 				bSetTimer.Call(gPanelHwnd, copiedTimerID, 1600, 0)
 				renderPanel()

@@ -11,9 +11,9 @@
 
 import { EventsOn } from '../wailsjs/runtime/runtime'
 
-export type BubbleCmd = 'screen_area' | 'win_picker' | 'launch' | 'stop' | 'quit' | 'failed'
+export type BubbleCmd = 'screen_area' | 'win_picker' | 'tab_share' | 'launch' | 'stop' | 'quit' | 'failed'
 
-export const BUBBLE_CMDS: BubbleCmd[] = ['screen_area', 'win_picker', 'launch', 'stop', 'quit', 'failed']
+export const BUBBLE_CMDS: BubbleCmd[] = ['screen_area', 'win_picker', 'tab_share', 'launch', 'stop', 'quit', 'failed']
 
 type Handler = (cmd: BubbleCmd) => void
 
@@ -63,7 +63,7 @@ export function clearPendingBubbleCmds(): void { pending = [] }
 export function rememberSource<T>(src: T | null): void { lastSource = src }
 export function rememberedSource<T>(): T | null { return lastSource as T | null }
 
-/** Tells the native bubble what will be watched (kind '', 'area' or 'window'). */
+/** Tells the native bubble what will be watched (kind '', 'area', 'window' or 'tab'). */
 export function tellBubbleSource(kind: string, label: string, detail: string, classTitle: string): void {
   try {
     (window as any)['go']?.['main']?.['App']?.['SetBubbleSource']?.(kind, label, detail, classTitle)?.catch?.(() => {})

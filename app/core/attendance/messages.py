@@ -10,10 +10,15 @@ def mmss(seconds: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
-def copy_message(name: str, off_for: float) -> str:
-    """The text the instructor pastes into the meeting chat at Warning 2."""
-    minutes = max(1, int(off_for // 60))
+def copy_message(name: str, off_for: float, not_seen: bool = False) -> str:
+    """The text the instructor pastes into the meeting chat at Warning 2.
+    `not_seen`: Presentia could not see their face, but does not know the
+    camera is off (same wording as the bubble's Copy button)."""
     first = name.split()[0] if name.strip() else "there"
+    if not_seen:
+        return (f"Hi {first}, we can't see your face on camera. Please check your camera is on and "
+                "your face is in the picture — attendance needs your face on screen.")
+    minutes = max(1, int(off_for // 60))
     return (f"Hi {first}, please turn your camera on. Presentia shows it has been off for "
             f"{minutes} minute{'s' if minutes != 1 else ''}, and attendance needs your face on screen.")
 
@@ -26,6 +31,7 @@ CATEGORY = {
     "grace_expired": "connection", "marked_connection": "connection", "suspicious_freeze": "warnings",
     "monitor_paused": "monitor", "monitor_resumed": "monitor", "monitor_gap": "monitor",
     "shared_tile": "warnings", "duplicate_face": "warnings",
+    "face_not_seen": "warnings", "face_seen": "warnings", "face_unclear": "warnings",
 }
 
 _PAUSE = {"minimized": "the meeting window was minimised", "covered": "the meeting window was covered",
@@ -49,8 +55,18 @@ def describe(ev: Event, names: dict[int, str], rules=None) -> tuple[str, str]:
         return (f"{c} student{'s' if c != 1 else ''} not here {int(d.get('after', 0) // 60)} min after start — Absent unless excused."
                 if c else "Everyone arrived."), "warn" if c else "ok"
     if k == "off_cam":
+        if d.get("not_seen"):
+            return f"{n}'s face has not been seen for 3 minutes — counting it as camera off.", "warn"
         return (f"{n}'s camera is off again (same episode)." if d.get("continued")
-                else f"{n} is not on camera."), "info"
+                else f"{n}'s camera is off."), "info"
+    if k == "face_not_seen":
+        return f"{n}'s face is not seen (camera off, or out of view).", "info"
+    if k == "face_seen":
+        return ((f"{n}'s camera is on (face not clear yet)." if d.get("unclear")
+                 else f"{n}'s face is seen again."), "ok")
+    if k == "face_unclear":
+        return (f"{n} is on camera, but their face has not been clear for "
+                f"{int(d.get('for', 0) // 60)} minutes. Click their name to check."), "info"
     if k == "off_cam_warning":
         lvl = d.get("level", 1)
         why = " after losing connection" if d.get("kind") == "connection" else ""
@@ -61,6 +77,8 @@ def describe(ev: Event, names: dict[int, str], rules=None) -> tuple[str, str]:
                   "suspicious_freeze": "Absent — video frozen too long"}.get(d.get("reason"), "Absent — camera off 4 min")
         return f"{n}: {reason}.", "error"
     if k == "back_on_cam":
+        if d.get("unclear"):
+            return f"{n}'s camera is back on (face not clear yet).", "ok"
         return f"{n} is back on camera.", "ok"
     if k == "frozen":
         return f"{n}'s video froze — may have lost connection.", "info"

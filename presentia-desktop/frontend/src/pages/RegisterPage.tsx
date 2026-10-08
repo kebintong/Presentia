@@ -52,6 +52,9 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
   const [statusMsg, setStatusMsg]       = useState('Capture face samples via webcam or import photos.')
   const [canSave, setCanSave]           = useState(false)
   const [embeddingB64, setEmbeddingB64] = useState<string | null>(null)
+  // Each captured pose / photo, kept as extra pictures of the face so a
+  // turned face in a meeting still matches.
+  const [samplesB64, setSamplesB64]     = useState<string[]>([])
   const [loading, setLoading]           = useState(false)
   // Track which steps just completed so we can re-trigger the pop animation
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set())
@@ -169,7 +172,7 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
     setFrame(null)
     setProgress(null)
     setCanSave(false)
-    setEmbeddingB64(null)
+    setEmbeddingB64(null); setSamplesB64([])
     setStatusMsg('Connecting to camera...')
 
     const ws = new WebSocket(`${WS}/ws/camera`)
@@ -207,6 +210,7 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
           if (data.embedding_b64) {
             console.log('[Presentia] Enrollment done — embedding received, length:', data.embedding_b64.length)
             setEmbeddingB64(data.embedding_b64)
+            setSamplesB64(Array.isArray(data.samples_b64) ? data.samples_b64 : [])
           } else {
             console.warn('[Presentia] Enrollment done — but NO embedding_b64 in payload! Sidecar may be outdated.')
             setStatusMsg('Error: embedding not received. Please rebuild the sidecar.')
@@ -309,6 +313,7 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
         }
         setStatusMsg(`Face extracted from ${data.samples} photo(s). Check the details and press Save.`)
         setEmbeddingB64(data.embedding_b64)
+        setSamplesB64(Array.isArray(data.samples_b64) ? data.samples_b64 : [])
         setCanSave(true)
         const reader = new FileReader()
         reader.onload = (e) => setFrame((e.target?.result as string).split(',')[1])
@@ -341,6 +346,7 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
           student_no: studentNo.trim(),
           name: name.trim(),
           embedding_b64: embeddingB64,
+          samples_b64: samplesB64,
           class_id: classInfo.id,
         }),
       })
@@ -370,7 +376,7 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
       setExistingMatch(null)
       setStudentNo('')
       setName('')
-      setEmbeddingB64(null)
+      setEmbeddingB64(null); setSamplesB64([])
       setCanSave(false)
       setProgress(null)
       setFrame(null)
@@ -391,7 +397,7 @@ export default function RegisterPage({ classInfo, onOpenStudents }: RegisterPage
       setExistingMatch(null)
       setStudentNo('')
       setName('')
-      setEmbeddingB64(null)
+      setEmbeddingB64(null); setSamplesB64([])
       setCanSave(false)
       setProgress(null)
       setFrame(null)

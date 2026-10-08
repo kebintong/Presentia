@@ -24,6 +24,8 @@ _INTERVAL = {
     m.NOT_ARRIVED: None,
     m.ARRIVING: None,
     m.PRESENT: "visible",
+    m.UNCLEAR: "visible",
+    m.UNSEEN: "unseen",
     m.RECOVERING: "visible",
     m.FROZEN: "frozen",
     m.DISCONNECTED: "disconnected",
@@ -64,6 +66,10 @@ class _Student:
     intervals: list[m.Interval] = field(default_factory=list)
     freeze: FreezeDetector | None = None
     visible_now: bool = False
+    no_evidence: float = 0.0          # time with no face and no live tile
+    off_evidence: float = 0.0         # time their tile showed the camera-off picture
+    unclear_for: float = 0.0          # time on camera without a clear look
+    noted: bool = False               # the "face not clear" note was given
 
 
 class AttendanceCore:
@@ -125,8 +131,9 @@ class AttendanceCore:
         self._last_t = t
 
         seen = self._best_faces(obs.faces, t)
+        tiles = dict(obs.tiles)
         for s in self.students.values():
-            self._step(s, seen.get(s.id), dt, t)
+            self._step(s, seen.get(s.id), dt, t, tiles.get(s.id))
         self._check_deadline(t)
         return out
 
@@ -164,17 +171,20 @@ class AttendanceCore:
             best[f.student_id] = f
         return best
 
-    def _step(self, s: _Student, f: m.FaceObs | None, dt: float, t: float) -> None:
+    def _step(self, s: _Student, f: m.FaceObs | None, dt: float, t: float, tile: str | None = None) -> None:
         r = self.rules
         visible = f is not None
         if visible:
             s.unseen = 0.0
             s.last_seen = t
+            s.no_evidence = s.off_evidence = 0.0
             if f.shared_tile and "shared_tile" not in s.flags:
                 s.flags.add("shared_tile")
                 self._emit("shared_tile", t, s.id)
         else:
             s.unseen += dt
+            s.no_evidence = 0.0 if tile == m.TILE_VIDEO else s.no_evidence + dt
+            s.off_evidence = s.off_evidence + dt if tile == m.TILE_AVATAR else 0.0
         motion = f.motion if f is not None else None
 
         st = s.state
@@ -187,7 +197,11 @@ class AttendanceCore:
             if cur is None or cur.kind != want:
                 self._interval(s, want, t)
         elif st == m.PRESENT:
-            self._present(s, visible, motion, dt, t)
+            self._present(s, visible, motion, dt, t, tile)
+        elif st == m.UNCLEAR:
+            self._unclear(s, visible, motion, dt, t, tile)
+        elif st == m.UNSEEN:
+            self._unseen(s, visible, motion, dt, t, tile)
         elif st == m.RECOVERING:
             s.settle += dt
             if visible and s.freeze.update(t, motion):
@@ -195,7 +209,7 @@ class AttendanceCore:
             elif s.settle >= r.recovery_settle:
                 self._set(s, m.PRESENT, t)
                 if not visible:
-                    self._present(s, visible, motion, 0.0, t)
+                    self._present(s, visible, motion, 0.0, t, tile)
         elif st == m.FROZEN:
             if visible:
                 s.frozen_for += dt    # frozen time ends when the tile goes away
@@ -229,7 +243,7 @@ class AttendanceCore:
                     s.episode = _Episode(m.EP_CONNECTION, started=t)
                     self._set(s, m.OFF_CAM, t)
         elif st == m.OFF_CAM:
-            self._off_cam(s, visible, motion, dt, t)
+            self._off_cam(s, visible, motion, dt, t, tile)
 
     def _arrival(self, s: _Student, visible: bool, t: float) -> None:
         r = self.rules
@@ -265,31 +279,98 @@ class AttendanceCore:
                 return start
         return None
 
-    def _present(self, s: _Student, visible: bool, motion, dt: float, t: float) -> None:
+    def _present(self, s: _Student, visible: bool, motion, dt: float, t: float,
+                 tile: str | None = None) -> None:
         r = self.rules
         if visible:
             if s.freeze.update(t, motion):
                 self._freeze(s, t)
                 return
-            ep = s.episode
-            if ep is not None and ep.back:
-                ep.back_for += dt
-                if ep.back_for >= r.reset_after_on:
-                    s.episode = None   # back long enough: the episode is over
+            self._still_back(s, dt)
             return
         if s.unseen < r.vanish_grace:
             return
-        # Gone without freezing first: camera off (or left).
+        if tile == m.TILE_VIDEO:
+            # Their camera is on; the face is just not clear (turned, half
+            # out of the picture). Counts as here.
+            s.freeze.reset()
+            s.unclear_for = s.unseen
+            self._set(s, m.UNCLEAR, s.last_seen or t)
+            return
+        if tile != m.TILE_AVATAR:
+            # Nothing shows the camera is off: only "face not seen", later.
+            if s.no_evidence >= r.unseen_after:
+                s.freeze.reset()
+                self._emit("face_not_seen", t, s.id, at=s.last_seen, data={"after": round(s.unseen, 1)})
+                self._set(s, m.UNSEEN, s.last_seen or t)
+            return
+        if s.off_evidence >= r.vanish_grace:
+            self._camera_off(s, t, s.unseen)
+
+    def _still_back(self, s: _Student, dt: float) -> None:
+        ep = s.episode
+        if ep is not None and ep.back:
+            ep.back_for += dt
+            if ep.back_for >= self.rules.reset_after_on:
+                s.episode = None   # back long enough: the episode is over
+
+    def _unclear(self, s: _Student, visible: bool, motion, dt: float, t: float, tile: str | None) -> None:
+        r = self.rules
+        if visible:
+            s.noted = False
+            self._set(s, m.PRESENT, t)
+            return
+        if tile == m.TILE_VIDEO:
+            s.unclear_for += dt
+            self._still_back(s, dt)
+            if s.unclear_for >= r.unclear_note_after and not s.noted:
+                s.noted = True
+                self._emit("face_unclear", t, s.id, data={"for": round(s.unclear_for, 1)})
+            return
+        if tile == m.TILE_AVATAR:
+            if s.off_evidence >= r.vanish_grace:
+                self._camera_off(s, t, s.off_evidence)
+            return
+        if s.no_evidence >= r.unseen_after:
+            self._emit("face_not_seen", t, s.id, at=t - s.no_evidence, data={"after": round(s.no_evidence, 1)})
+            self._set(s, m.UNSEEN, t - s.no_evidence)
+
+    def _unseen(self, s: _Student, visible: bool, motion, dt: float, t: float, tile: str | None) -> None:
+        r = self.rules
+        if visible:
+            self._emit("face_seen", t, s.id, data={"unseen_for": round(t - s.since, 1)})
+            s.freeze.reset()
+            self._set(s, m.PRESENT, t)
+            return
+        if tile == m.TILE_VIDEO:
+            self._emit("face_seen", t, s.id, data={"unseen_for": round(t - s.since, 1), "unclear": True})
+            s.unclear_for = 0.0
+            self._set(s, m.UNCLEAR, t)
+            return
+        if tile == m.TILE_AVATAR:
+            if s.off_evidence >= r.vanish_grace:
+                self._camera_off(s, t, s.off_evidence)
+            return
+        if s.no_evidence >= r.unseen_ladder_after:
+            # Not seen for minutes and no sign of the camera being on: the
+            # camera-off ladder starts now, from zero.
+            self._camera_off(s, t, 0.0, not_seen=True)
+
+    def _camera_off(self, s: _Student, t: float, off_for: float, not_seen: bool = False) -> None:
+        """Gone without freezing first: camera off (or left)."""
         ep = s.episode
         if ep is not None and ep.back:
             ep.back = False            # back too briefly: same episode goes on
-            ep.elapsed += s.unseen
+            ep.elapsed += off_for
         else:
-            s.episode = _Episode(m.EP_CAMERA, elapsed=s.unseen, started=s.last_seen or t)
+            s.episode = _Episode(m.EP_CAMERA, elapsed=off_for, started=t - off_for)
         s.freeze.reset()
-        self._emit("off_cam", t, s.id, at=s.last_seen, data={
-            "continued": ep is not None, "level": s.episode.level})
-        self._set(s, m.OFF_CAM, s.last_seen or t)
+        data = {"continued": ep is not None, "level": s.episode.level}
+        if not_seen:
+            data["not_seen"] = True
+        at = t - off_for if not not_seen else t
+        self._emit("off_cam", t, s.id, at=at, data=data)
+        self._set(s, m.OFF_CAM, at)
         self._ladder(s, t)
 
     def _freeze(self, s: _Student, t: float) -> None:
@@ -299,21 +380,29 @@ class AttendanceCore:
         self._emit("frozen", t, s.id, at=at)
         self._set(s, m.FROZEN, at)
 
-    def _off_cam(self, s: _Student, visible: bool, motion, dt: float, t: float) -> None:
+    def _off_cam(self, s: _Student, visible: bool, motion, dt: float, t: float,
+                 tile: str | None = None) -> None:
         r = self.rules
         ep = s.episode
         # A suspicious freeze only ends when the picture moves again.
         back = visible and (ep is None or ep.kind != m.EP_SUSPICIOUS
                             or FreezeDetector.moving(motion, r.freeze_eps))
-        if back:
+        # Their tile shows live video again: the camera is back on, even if
+        # the face is not clear yet.
+        unclear = (not visible and tile == m.TILE_VIDEO
+                   and (ep is None or ep.kind != m.EP_SUSPICIOUS))
+        if back or unclear:
             if ep is not None:
                 ep.back = True
                 ep.back_for = 0.0
             s.freeze.reset()
-            self._emit("back_on_cam", t, s.id, data={
-                "level": ep.level if ep else 0, "off_for": round(ep.elapsed, 1) if ep else 0,
-                "kind": ep.kind if ep else m.EP_CAMERA})
-            self._set(s, m.PRESENT, t)
+            data = {"level": ep.level if ep else 0, "off_for": round(ep.elapsed, 1) if ep else 0,
+                    "kind": ep.kind if ep else m.EP_CAMERA}
+            if unclear:
+                data["unclear"] = True
+                s.unclear_for = 0.0
+            self._emit("back_on_cam", t, s.id, data=data)
+            self._set(s, m.UNCLEAR if unclear else m.PRESENT, t)
             return
         if ep is None:
             s.episode = ep = _Episode(m.EP_CAMERA, started=t)
@@ -376,14 +465,16 @@ class AttendanceCore:
         """Everything the roster, the bubble and Live View show, as plain data."""
         r = self.rules
         students = []
-        counts = {"here": 0, "late": 0, "cam_off": 0, "connection": 0, "not_yet": 0, "absent": 0,
-                  "total": len(self.students)}
+        counts = {"here": 0, "late": 0, "cam_off": 0, "unseen": 0, "connection": 0, "not_yet": 0,
+                  "absent": 0, "total": len(self.students)}
         issues = []
         for s in self.students.values():
             item = {"id": s.id, "name": s.name, "state": s.state, "since": s.since,
                     "arrival": s.arrival, "time_in": s.time_in, "flags": sorted(s.flags)}
-            if s.state in (m.PRESENT, m.RECOVERING):
+            if s.state in (m.PRESENT, m.RECOVERING, m.UNCLEAR):
                 counts["here"] += 1
+            elif s.state == m.UNSEEN:
+                counts["unseen"] += 1
             elif s.state in (m.NOT_ARRIVED, m.ARRIVING):
                 counts["not_yet"] += 1
             elif s.state == m.OFF_CAM:
@@ -405,6 +496,11 @@ class AttendanceCore:
                 item.update(grace_left=round(max(0.0, r.reconnect_grace - s.grace_used), 1))
                 issues.append({"kind": "disconnected", "student_id": s.id,
                                "grace_left": item["grace_left"]})
+            elif s.state == m.UNSEEN:
+                item.update(unseen_for=round(t - s.since, 1))
+                issues.append({"kind": "unseen", "student_id": s.id, "unseen_for": item["unseen_for"]})
+            elif s.state == m.UNCLEAR:
+                item.update(unclear_for=round(s.unclear_for, 1))
             elif s.state == m.FROZEN:
                 item.update(frozen_for=round(s.frozen_for, 1))
                 issues.append({"kind": "frozen", "student_id": s.id, "frozen_for": item["frozen_for"]})
@@ -441,6 +537,8 @@ class AttendanceCore:
                 status, reason = "present", ""
             if s.state == m.OFF_CAM:
                 review.append("off_cam_at_end")
+            if s.state == m.UNSEEN:
+                review.append("not_seen_at_end")
             if s.state in (m.DISCONNECTED, m.FROZEN):
                 review.append("connection_at_end")
             for flag in ("shared_tile", "suspicious_freeze", "duplicate_face", "connection"):

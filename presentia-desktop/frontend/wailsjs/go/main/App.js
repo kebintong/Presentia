@@ -54,6 +54,10 @@ export function OpenImageFilesDialog() {
   return window['go']['main']['App']['OpenImageFilesDialog']();
 }
 
+export function OpenInBrowser(arg1, arg2) {
+  return window['go']['main']['App']['OpenInBrowser'](arg1, arg2);
+}
+
 export function PipClose() {
   return window['go']['main']['App']['PipClose']();
 }

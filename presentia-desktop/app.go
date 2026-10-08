@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -178,7 +179,7 @@ func (a *App) startup(ctx context.Context) {
 	// Register listeners for the native bubble window events.
 	// bubble_win.go fires these via EventsEmit; we forward them to the frontend.
 	for _, cmd := range []string{
-		"bubble:screen_area", "bubble:win_picker",
+		"bubble:screen_area", "bubble:win_picker", "bubble:tab_share",
 		"bubble:launch", "bubble:stop", "bubble:quit",
 		"bubble:failed",
 	} {
@@ -473,6 +474,46 @@ type WindowInfo struct {
 	Height int    `json:"height"`
 	// Hwnd lets the sidecar follow the window when it moves or resizes.
 	Hwnd uint64 `json:"hwnd"`
+	// Exe is the program's full path; Browser its name when it is a web
+	// browser ("Chrome", "Edge", "Brave"…), which stops drawing a window
+	// that is fully covered — so the app offers to share the tab instead.
+	Exe     string `json:"exe"`
+	Browser string `json:"browser"`
+}
+
+// browserNames maps a browser's program name to how it is shown.
+var browserNames = map[string]string{
+	"chrome.exe": "Chrome", "msedge.exe": "Edge", "brave.exe": "Brave", "vivaldi.exe": "Vivaldi",
+	"opera.exe": "Opera", "chromium.exe": "Chromium", "arc.exe": "Arc", "firefox.exe": "Firefox",
+}
+
+// browserName is the display name of a browser program, or "".
+func browserName(exePath string) string {
+	return browserNames[strings.ToLower(filepath.Base(exePath))]
+}
+
+// OpenInBrowser opens Presentia's tab-sharing page (http://127.0.0.1:7788/share)
+// in a given browser, so it opens next to the meeting: launching a running
+// browser's program with a link opens a new tab in it. With no browser
+// given, or one that is not a known browser, the default browser is used.
+func (a *App) OpenInBrowser(url string, exePath string) error {
+	if !strings.HasPrefix(url, sidecarURL+"/share?t=") {
+		return fmt.Errorf("not a Presentia share link")
+	}
+	if exePath != "" && browserName(exePath) != "" {
+		if _, err := os.Stat(exePath); err == nil {
+			cmd := exec.Command(exePath, url)
+			if err := cmd.Start(); err == nil {
+				go cmd.Wait() //nolint:errcheck // the browser hands the link over and exits
+				return nil
+			}
+		}
+	}
+	if a.ctx == nil {
+		return fmt.Errorf("the app is not ready")
+	}
+	wailsruntime.BrowserOpenURL(a.ctx, url)
+	return nil
 }
 
 // GetOpenWindows returns all visible, titled top-level windows so the
