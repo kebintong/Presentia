@@ -11,6 +11,8 @@ version and starts a new empty "Next release" section.
 
 <!-- Write what changed for teachers here, as short bullet points. -->
 
+## 1.6.3 — 2026-10-08
+
 - **Share the meeting's browser tab.** New **Browser Tab** choice on the Meeting Monitor and the bubble: Presentia watches the Meet (or Zoom / Teams web) tab itself, the way sharing a tab in Meet works, so monitoring keeps going while you switch to other apps or tabs — no more "completely covered and has stopped updating". Works in Chrome, Edge and Brave; Presentia opens a small page in your meeting's browser where you pick the tab.
 - **Switch what's watched without stopping.** If a browser window gets covered, press **Use browser tab instead**; monitoring carries on with the same session.
 - **"Not seen" instead of "camera off".** A student whose face isn't recognised is no longer called camera off. Presentia reads the meeting's video tiles: a live tile means **On camera** (counted present, even with half a face), Meet's camera-off picture means **Camera off**, and only when it can't tell does it say **Not seen** — after 30 seconds, not 5.
