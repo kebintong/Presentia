@@ -149,31 +149,29 @@ type bBLENDFUNCTION struct{ BlendOp, BlendFlags, SourceConstantAlpha, AlphaForma
 // is still reading it — a rare crash that is very hard to reproduce.
 var (
 	bClsBubble   = syscall.StringToUTF16Ptr("PresentiaBubbleCls")
-	bClsDial     = syscall.StringToUTF16Ptr("PresentiaBubbleDialCls")
 	bTitleBubble = syscall.StringToUTF16Ptr("Presentia Monitor Bubble")
-	bTitleDial   = syscall.StringToUTF16Ptr("")
 )
 
 // ── Style & theme ────────────────────────────────────────────────────────────
 //
-// Both are set from the frontend (Wails thread) and read on the bubble thread.
-// The logo follows both: cyan in light mode, white in dark mode, spectrum when
-// gIridescent is on (the app only allows that in dark mode). gIridescent also
-// switches the dial to pastel buttons.
+// Set from the frontend (Wails thread) and read on the bubble thread. The
+// bubble itself follows the full theme key (setBubbleThemeKeyNative); these
+// two flags remain for the Live View pop-out, which only has dark, light and
+// iridescent looks.
 
 var (
 	gDarkTheme  = true
 	gIridescent bool
 )
 
-// setBubbleThemeNative swaps the logo and dial labels for dark/light.
+// setBubbleThemeNative is the older light/dark switch (kept for the Live View).
 func setBubbleThemeNative(dark bool) {
 	gDarkTheme = dark
 	postToBubble(bWmAppTheme)
 	pipPost()
 }
 
-// setBubbleStyleNative turns the iridescent logo and dial on or off.
+// setBubbleStyleNative is the older iridescent switch (kept for the Live View).
 func setBubbleStyleNative(iri bool) {
 	gIridescent = iri
 	postToBubble(bWmAppStyle)
@@ -215,18 +213,16 @@ var (
 // than in a local.
 //
 // They are assigned lazily instead of by a var initializer: bubbleWndProc
-// reaches registerClasses (via openDial), and registerClasses needs these same
+// reaches registerClasses (via the panel), and registerClasses needs these same
 // variables, which Go rejects at compile time as an initialization cycle.
 var (
 	gProcOnce      sync.Once
 	gBubbleWndProc uintptr
-	gDialWndProc   uintptr
 )
 
 func ensureWndProcs() {
 	gProcOnce.Do(func() {
 		gBubbleWndProc = syscall.NewCallback(bubbleWndProc)
-		gDialWndProc = syscall.NewCallback(dialWndProc)
 	})
 }
 
@@ -282,7 +278,11 @@ func togglePin() {
 	}
 }
 
-// ── Bubble window procedure ───────────────────────────────────────────────────
+// ── Capsule window procedure ─────────────────────────────────────────────────
+//
+// The bubble window is the capsule (see bubble_panel_win.go). A click opens or
+// closes its panel; dragging moves it (and the panel with it), and dropping it
+// near a screen edge snaps it there.
 
 func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	switch uint32(msg) {
@@ -293,31 +293,37 @@ func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		bEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 		return 0
 
-	case bWmAppStyle, bWmAppTheme:
-		applyBubbleStyle(hwnd)
-		renderDial()
-		updateChip()
-		return 0
-
-	case bWmAppLive:
-		updateChip() // new monitoring stats from the live poller
+	case bWmAppStyle, bWmAppTheme, bWmAppLive:
+		renderBubble() // theme changed, or new monitoring stats / source
 		return 0
 
 	case bWmLButtonDown:
+		// Only the visible capsule counts (the window also holds its shadow).
+		if gCapLayout == nil || gCapLayout.HitAt(float64(loWord(lParam)), float64(hiWord(lParam))) == "" {
+			return 0
+		}
 		// Start a possible drag. Whether this turns out to be a click or a
 		// drag is decided on mouse-up, by how far the pointer travelled.
 		var pt bPOINT
 		bGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
-		var rc bRECT
-		bGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
 		gGrabX, gGrabY = pt.X, pt.Y
-		gWinX, gWinY = rc.Left, rc.Top
+		gWinX, gWinY = gCapBody.X, gCapBody.Y
 		gDragging, gDragMoved = true, false
 		bSetCapture.Call(hwnd)
 		return 0
 
 	case bWmMouseMove:
 		if !gDragging {
+			if !gCapTracked {
+				tme := bTRACKMOUSEEVENT{CbSize: uint32(unsafe.Sizeof(bTRACKMOUSEEVENT{})), DwFlags: bTmeLeave, HwndTrack: hwnd}
+				bTrackMouseEvent.Call(uintptr(unsafe.Pointer(&tme)))
+				gCapTracked = true
+			}
+			over := gCapLayout != nil && gCapLayout.HitAt(float64(loWord(lParam)), float64(hiWord(lParam))) != ""
+			if over != gCapHover {
+				gCapHover = over
+				renderCapsule()
+			}
 			return 0
 		}
 		var pt bPOINT
@@ -325,13 +331,27 @@ func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		dx, dy := pt.X-gGrabX, pt.Y-gGrabY
 		if !gDragMoved && (abs32(dx) > bDragSlop || abs32(dy) > bDragSlop) {
 			gDragMoved = true
-			// A dial fanned out around the old position would be left stranded.
-			closeDialNow()
 		}
 		if gDragMoved {
-			bSetWindowPos.Call(hwnd, 0,
-				uintptr(uint32(gWinX+dx)), uintptr(uint32(gWinY+dy)), 0, 0,
-				bSwpNoSize|bSwpNoZOrder|bSwpNoActivate)
+			gCapBody = bPOINT{gWinX + dx, gWinY + dy}
+			if gCapLayout != nil {
+				pos := bPOINT{gCapBody.X - int32(gCapLayout.BX0), gCapBody.Y - int32(gCapLayout.BY0)}
+				bSetWindowPos.Call(hwnd, 0, uintptr(uint32(pos.X)), uintptr(uint32(pos.Y)), 0, 0,
+					bSwpNoSize|bSwpNoZOrder|bSwpNoActivate)
+			}
+			if gPanelHwnd != 0 && gPanelLayout != nil {
+				pos := panelWindowPos(gPanelLayout)
+				bSetWindowPos.Call(gPanelHwnd, 0, uintptr(uint32(pos.X)), uintptr(uint32(pos.Y)), 0, 0,
+					bSwpNoSize|bSwpNoZOrder|bSwpNoActivate)
+			}
+		}
+		return 0
+
+	case bWmMouseLeave:
+		gCapTracked = false
+		if gCapHover {
+			gCapHover = false
+			renderCapsule()
 		}
 		return 0
 
@@ -342,34 +362,29 @@ func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		gDragging = false
 		bReleaseCapture.Call()
 		if gDragMoved {
-			return 0 // that was a drag, not a click
+			snapCapsule()
+			saveCapPos()
+			renderBubble()
+			return 0
 		}
-		// A real click: pop the controls out, or tuck them back in.
-		if gDialOpen {
-			closeDial()
-		} else {
-			openDial(hwnd)
-		}
+		togglePanel() // a real click
 		return 0
 
-	case bWmRButtonDown:
-		// Right-click = quit immediately
-		emitBubbleCmd("bubble:quit")
+	case bWmRButtonUp:
+		togglePanel()
 		return 0
 
 	case bWmNcHitTest:
 		// MUST be HTCLIENT. Returning HTCAPTION makes Windows treat the whole
-		// bubble as a title bar, which suppresses every client mouse message —
-		// WM_LBUTTONDOWN never arrives and the dial can never open. Dragging is
-		// handled above instead.
+		// capsule as a title bar, which suppresses every client mouse message.
+		// Dragging is handled above instead.
 		return bHtClient
 
 	case bWmClose:
 		// Posted by CloseFloatingBubble from the Wails thread. Destroying the
-		// window has to happen HERE, on the thread that created it — Windows
-		// rejects a cross-thread DestroyWindow, which is why closing the
-		// bubble from the UI used to do nothing at all.
-		closeDialNow()
+		// windows has to happen HERE, on the thread that created them —
+		// Windows rejects a cross-thread DestroyWindow.
+		closePanel()
 		bDestroyWindow.Call(hwnd)
 		return 0
 
@@ -383,32 +398,21 @@ func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 
 // ── Window classes ────────────────────────────────────────────────────────────
 
-// registerClasses registers both window classes exactly once per process.
+// registerClasses registers the capsule's window class once per process.
 func registerClasses(hInst uintptr) {
 	gClassOnce.Do(func() {
 		ensureWndProcs()
-		arrow, _, _ := bLoadCursorW.Call(0, 32512) // IDC_ARROW
-		hand, _, _ := bLoadCursorW.Call(0, 32649)  // IDC_HAND
+		hand, _, _ := bLoadCursorW.Call(0, 32649) // IDC_HAND
 
-		// Both windows are fully painted by UpdateLayeredWindow, so neither
-		// needs a background brush.
+		// Painted by UpdateLayeredWindow, so no background brush.
 		wcBubble := bWNDCLASSEX{
 			CbSize:        uint32(unsafe.Sizeof(bWNDCLASSEX{})),
 			LpfnWndProc:   gBubbleWndProc,
 			HInstance:     hInst,
 			LpszClassName: bClsBubble,
-			HCursor:       arrow,
-		}
-		bRegisterClassExW.Call(uintptr(unsafe.Pointer(&wcBubble)))
-
-		wcDial := bWNDCLASSEX{
-			CbSize:        uint32(unsafe.Sizeof(bWNDCLASSEX{})),
-			LpfnWndProc:   gDialWndProc,
-			HInstance:     hInst,
-			LpszClassName: bClsDial,
 			HCursor:       hand,
 		}
-		bRegisterClassExW.Call(uintptr(unsafe.Pointer(&wcDial)))
+		bRegisterClassExW.Call(uintptr(unsafe.Pointer(&wcBubble)))
 	})
 }
 
@@ -479,25 +483,15 @@ func OpenFloatingBubble(a *App) {
 		hInst, _, _ := bGetModuleHandleW.Call(0)
 		registerClasses(hInst)
 
-		// Start at bottom-right of primary monitor, above the taskbar
-		bw, bh := bubbleSize()
-		sw, _, _ := bGetSystemMetrics.Call(0)
-		sh, _, _ := bGetSystemMetrics.Call(1)
-		startX := int32(sw) - bw - 36
-		startY := int32(sh) - bh - 84
-		if startX < 0 {
-			startX = 0
-		}
-		if startY < 0 {
-			startY = 0
-		}
-
+		// Created tiny; the first render sizes and places it (bottom-right
+		// of the screen, or wherever the user last left it).
+		loadCapPos()
 		hwnd, _, _ := bCreateWindowExW.Call(
 			bWsExTopmost|bWsExToolWindow|bWsExLayered|bWsExNoActivate,
 			uintptr(unsafe.Pointer(bClsBubble)),
 			uintptr(unsafe.Pointer(bTitleBubble)),
-			bWsPopup|bWsVisible,
-			uintptr(startX), uintptr(startY), uintptr(bw), uintptr(bh),
+			bWsPopup,
+			0, 0, 1, 1,
 			0, 0, hInst, 0,
 		)
 
@@ -511,16 +505,16 @@ func OpenFloatingBubble(a *App) {
 			return
 		}
 
-		// A layered window stays invisible until it is given its first picture.
-		updateLogo(hwnd)
-		bShowWindow.Call(hwnd, 5)
-
 		gBubbleMu.Lock()
 		gBubbleHwnd = hwnd
 		excludeFromCapture(hwnd)
 		tid, _, _ := bGetCurrentThreadId.Call()
 		gThreadID = uint32(tid)
 		gBubbleMu.Unlock()
+
+		// A layered window stays invisible until it is given its first picture.
+		renderCapsule()
+		bShowWindow.Call(hwnd, 4) // SW_SHOWNOACTIVATE
 
 		// Bubble mode: the app lives in the tray. Only hide once the bubble
 		// is actually on screen — hiding first meant a failed bubble left the
@@ -548,7 +542,7 @@ func OpenFloatingBubble(a *App) {
 		// Leave bubble mode: stats, chip, tray icon and Live View go, and
 		// Presentia comes back out of the tray.
 		stopLivePoller()
-		destroyChip()
+		releaseBubbleBitmaps()
 		removeTray()
 		if open, src := pipIsOpen(); open && src == pipSrcMonitor {
 			closePipNative()

@@ -1161,6 +1161,7 @@ class _LiveMonitor:
         self.jpeg: bytes = b""
         self.seq = 0
         self.counts = {"present": 0, "missing": 0, "waiting": 0, "total": 0, "unknown": 0}
+        self.away: list[dict] = []
         self.last_alert = ""
         self.last_level = ""
 
@@ -1188,8 +1189,14 @@ class _LiveMonitor:
             c[r["state"]] = c.get(r["state"], 0) + 1
         c["total"] = len(roster)
         c["unknown"] = unknown
+        # Who is not on camera, longest first (the bubble lists them with a
+        # Copy button for the reminder message).
+        away = sorted(({"id": r["id"], "name": r["name"], "away": float(r.get("away") or 0.0)}
+                       for r in roster if r.get("state") == "missing"),
+                      key=lambda a: -a["away"])
         with self._lock:
             self.counts = c
+            self.away = away
 
     def alert(self, message: str, level: str) -> None:
         with self._lock:
@@ -1202,6 +1209,7 @@ class _LiveMonitor:
                 "name": self.name,
                 "elapsed": (time.time() - self.started) if self.active else 0.0,
                 **self.counts,
+                "away": list(self.away) if self.active else [],
                 "last_alert": self.last_alert,
                 "last_level": self.last_level,
                 "frame_seq": self.seq,

@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useLayoutEffect } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import TopBar from './components/TopBar'
 import { switchTheme } from './themeTransition'
 import { ThemeKey, loadTheme, saveTheme, themeInfo } from './themes'
 import { applyHideFromCapture, loadHideFromCapture } from './captureVisibility'
+import { listenToBubble, clearPendingBubbleCmds, rememberSource, tellBubbleSource } from './bubbleBridge'
 import Sidebar from './components/Sidebar'
 import SettingsPanel, { UpdateInfo, Tab as SettingsTab } from './components/SettingsPanel'
 import UpdateNotice from './components/UpdateNotice'
@@ -13,7 +14,7 @@ import SessionPage from './pages/SessionPage'
 import ReportsPage from './pages/ReportsPage'
 import ClassPickerPage from './pages/ClassPickerPage'
 import StudentsPage from './pages/StudentsPage'
-import { ClassInfo } from './classes'
+import { ClassInfo, classLabel } from './classes'
 import './style.css'
 import './themes.css'
 
@@ -45,6 +46,25 @@ export default function App() {
   }
 
   const switchClass = () => setActiveClass(null)
+
+  // The bubble's buttons work from any page: a command arriving while the
+  // Monitor page is closed opens it (bubbleBridge.ts).
+  const activeClassRef = useRef<ClassInfo | null>(null)
+  activeClassRef.current = activeClass
+  useEffect(() => listenToBubble(() => {
+    if (activeClassRef.current) {
+      setPage('meet')
+    } else {
+      clearPendingBubbleCmds()
+      goApp()?.['ShowMainWindow']?.() // pick a class first
+    }
+  }), [])
+
+  // A different class (or none): the picked area belonged to the old one.
+  useEffect(() => {
+    rememberSource(null)
+    tellBubbleSource('', '', '', activeClass ? classLabel(activeClass) : '')
+  }, [activeClass?.id])
   const [engineReady, setEngineReady] = useState(false)
   // What first launch is doing (hardware check, model download progress).
   const [engineMessage, setEngineMessage] = useState('')
@@ -61,9 +81,10 @@ export default function App() {
     else root.removeAttribute('data-style')
     saveTheme(themeKey)
     // The floating bubble is a native Win32 window, so it cannot read the
-    // stylesheet — push the mode and the spectrum mark down to it explicitly.
+    // stylesheet — tell it which of the six looks to draw.
     goApp()?.['SetBubbleTheme']?.(info.mode === 'dark')
     goApp()?.['SetBubbleStyle']?.(themeKey === 'iri')
+    goApp()?.['SetBubbleThemeKey']?.(themeKey)
   }, [themeKey, info])
 
   // Show (default) or hide every Presentia window in screen captures. Applied

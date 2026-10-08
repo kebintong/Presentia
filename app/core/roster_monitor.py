@@ -94,5 +94,8 @@ class RosterMonitor:
                 state = "missing"
             else:
                 state = "present"
-            out.append({"id": student_id, "name": st["name"], "state": state})
+            item = {"id": student_id, "name": st["name"], "state": state}
+            if state == "missing" and st["last_seen"] is not None:
+                item["away"] = round(time.monotonic() - st["last_seen"], 1)
+            out.append(item)
         return out

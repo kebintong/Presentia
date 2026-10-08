@@ -7,9 +7,9 @@ import {
   PrepareScreenPick, EnterPickerMode, ExitPickerMode,
   OpenBubble, CloseBubble,
 } from '../../wailsjs/go/main/App'
-import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+import { setBubbleHandler, rememberSource, rememberedSource, tellBubbleSource, type BubbleCmd } from '../bubbleBridge'
 import { useFrameFeed, type Frame } from '../components/frameFeed'
-import { ClassInfo } from '../classes'
+import { ClassInfo, classLabel } from '../classes'
 import VerifyDialog, { CheckState, VerifyStudent, newCheck } from '../components/VerifyDialog'
 
 const API = 'http://127.0.0.1:7788'
@@ -56,6 +56,12 @@ interface Region {
   height: number
   hwnd?: number
   title?: string
+}
+
+/** What is remembered between visits to the page. */
+interface Source {
+  region: Region
+  thumb: string | null
 }
 
 interface ScreenShot {
@@ -115,9 +121,10 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
     feed.push(f)
     setHasFrame(f !== null)
   }, [feed])
-  const [region, setRegion]             = useState<Region | null>(null)
+  // What to watch survives leaving the page (bubbleBridge.ts).
+  const [region, setRegion]             = useState<Region | null>(() => rememberedSource<Source>()?.region ?? null)
   // A small picture of the picked screen area, so it is plain what is watched.
-  const [regionThumb, setRegionThumb]   = useState<string | null>(null)
+  const [regionThumb, setRegionThumb]   = useState<string | null>(() => rememberedSource<Source>()?.thumb ?? null)
   const [roster, setRoster]             = useState<RosterStudent[]>([])
   const [unknowns, setUnknowns]         = useState<UnknownFace[]>([])
   const [alerts, setAlerts]             = useState<AlertItem[]>([])
@@ -147,33 +154,41 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
     setAlerts((prev) => [makeAlert(message, level), ...prev].slice(0, 100))
   }
 
-  // ── Native bubble event listeners ─────────────────────────────────
-  // The native Win32 bubble (bubble_win.go) sends events via Go → Wails runtime.
-  // Go's startup() re-emits them as "native:bubble:*" to the JS side.
-  useEffect(() => {
-    EventsOn('native:bubble:screen_area', () => { pickRegionFn() })
-    EventsOn('native:bubble:win_picker',  () => { openWinPickerFn() })
-    EventsOn('native:bubble:launch',      () => { startMonitoringFn() })
-    EventsOn('native:bubble:stop',        () => { stopMonitoring() })
-    EventsOn('native:bubble:quit',        () => {
-      CloseBubble()
-      setBubbleOpen(false)
-    })
-    // The bubble is a native Win32 window; if it cannot be created the button
-    // must not stay stuck on "Close Bubble" with nothing on screen.
-    EventsOn('native:bubble:failed',      () => {
-      setBubbleOpen(false)
-      addAlert('The floating bubble could not open — use the buttons above instead.', 'error')
-    })
-    return () => {
-      EventsOff('native:bubble:screen_area')
-      EventsOff('native:bubble:win_picker')
-      EventsOff('native:bubble:launch')
-      EventsOff('native:bubble:stop')
-      EventsOff('native:bubble:quit')
-      EventsOff('native:bubble:failed')
+  // ── Native bubble ─────────────────────────────────────────────────
+  // The bubble's buttons arrive through App (bubbleBridge.ts), which opens
+  // this page first if needed. The ref always holds the latest handlers.
+  const bubbleCmdRef = useRef<(cmd: BubbleCmd) => void>(() => {})
+  bubbleCmdRef.current = (cmd) => {
+    switch (cmd) {
+      case 'screen_area': pickRegionFn(); break
+      case 'win_picker':  openWinPickerFn(); break
+      case 'launch':      startMonitoringFn(); break
+      case 'stop':        stopMonitoring(); break
+      case 'quit':        CloseBubble(); setBubbleOpen(false); break
+      // The bubble is a native Win32 window; if it cannot be created the
+      // button must not stay stuck on "Close Bubble" with nothing on screen.
+      case 'failed':
+        setBubbleOpen(false)
+        addAlert('The floating bubble could not open — use the buttons above instead.', 'error')
+        break
     }
-  }, [region, sessionName, missingAfter, monitoring])
+  }
+  useEffect(() => setBubbleHandler((cmd) => bubbleCmdRef.current(cmd)), [])
+
+  // The bubble outlives this page: ask whether it is up.
+  useEffect(() => {
+    try { goApp()?.['BubbleIsOpen']?.()?.then?.((open: boolean) => setBubbleOpen(!!open))?.catch?.(() => {}) } catch { /* preview */ }
+  }, [])
+
+  // Keep the bubble told what will be watched, so it can show "Ready" and
+  // offer Start even with the app in the tray.
+  useEffect(() => {
+    rememberSource<Source>(region ? { region, thumb: regionThumb } : null)
+    const cls = classLabel(classInfo)
+    if (!region) tellBubbleSource('', '', '', cls)
+    else if (region.hwnd) tellBubbleSource('window', region.title || 'Selected window', 'Followed when it moves or is covered', cls)
+    else tellBubbleSource('area', 'Screen area', `${region.width} × ${region.height} px at ${region.left}, ${region.top}`, cls)
+  }, [region, regionThumb, classInfo])
 
   // ── Screen region picker ──────────────────────────────────────────
   const pickRegionFn = async () => {

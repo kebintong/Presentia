@@ -480,6 +480,25 @@ func (a *App) SetBubbleStyle(iridescent bool) {
 	setBubbleStyleNative(iridescent)
 }
 
+// SetBubbleThemeKey makes the bubble follow Settings → Appearance: one of
+// light, brutal, editorial, bento, iri, dark.
+func (a *App) SetBubbleThemeKey(key string) {
+	setBubbleThemeKeyNative(key)
+}
+
+// SetBubbleSource tells the bubble what the Monitor page will watch (kind is
+// "", "area" or "window") and which class it is, so the bubble can show
+// "Ready" and offer Start without the app on screen.
+func (a *App) SetBubbleSource(kind, label, detail, classTitle string) {
+	setBubbleSourceNative(kind, label, detail, classTitle)
+}
+
+// BubbleIsOpen reports whether the floating bubble is on screen (the Monitor
+// page asks when it opens, since the bubble outlives the page).
+func (a *App) BubbleIsOpen() bool {
+	return bubbleIsOpenNative()
+}
+
 // SourcePicked is called by the Monitor page right after a screen area or
 // window is chosen; when the choice came from the bubble it is confirmed
 // with a Windows notification (the app window goes back to the tray).

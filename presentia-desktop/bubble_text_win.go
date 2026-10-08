@@ -10,13 +10,12 @@ import (
 	"unsafe"
 )
 
-// ── Smooth text for the dial ─────────────────────────────────────────────────
+// ── Smooth text for the floating windows ─────────────────────────────────────
 //
 // GDI's own anti-aliasing is poor at label sizes on a layered window (the
-// "jagged" look), and the dial used Segoe UI rather than the app's font. So
-// labels and icon glyphs are now drawn with GDI at ssK times their size into a
+// "jagged" look). So text is drawn with GDI at ssK times its size into a
 // scratch bitmap, box-filtered back down to a coverage mask, and painted into
-// the dial like any other shape. Labels use Poppins — the app's display font —
+// the window's pixels like any other shape. Labels use Poppins — the app's display font —
 // embedded here and registered privately for this process.
 
 const ssK = 4 // supersampling factor
@@ -58,7 +57,7 @@ type ssBuf struct {
 	w, h int32
 }
 
-var gDialSS ssBuf // bubble thread only
+var gBubbleSS ssBuf // bubble thread only (capsule and panel)
 
 // ensure makes sure the scratch DIB is at least w x h.
 func (b *ssBuf) ensure(w, h int32) bool {
@@ -143,18 +142,6 @@ func ssDraw(b *ssBuf, s string, bigFont uintptr, x0, y0, x1, y1 float64, flags u
 			}
 		}
 	}
-}
-
-// ssText draws s centred in an overlay-space box of the dial, in colour c at
-// the given opacity.
-func ssText(s string, bigFont uintptr, x0, y0, x1, y1 float64, c rgb, alpha float64) {
-	if alpha <= 0 {
-		return
-	}
-	ssDraw(&gDialSS, s, bigFont, x0, y0, x1, y1, bDtCenter|bDtVCenter|bDtSingleLine|bDtNoPrefix,
-		gDialW, gDialH, func(x, y int32, a float64) {
-			dialPaint(int(y)*int(gDialW)+int(x), float32(a*alpha), c)
-		})
 }
 
 // textWidth measures s in a big (ssK x) font and returns overlay pixels.
