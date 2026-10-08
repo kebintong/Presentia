@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 from app.data import cloud, db
 from app.core import diag, perf
-from app.core.self_mask import SelfMask
+from app.core.self_mask import SelfMask, paint, soften
 from app.core.face_engine import FaceEngine, MATCH_THRESHOLD
 
 # ── DB init ──────────────────────────────────────────────────────────────────
@@ -130,6 +130,37 @@ def _start_parent_watch() -> None:
 
 
 _start_parent_watch()
+
+
+# ── Crash notes ───────────────────────────────────────────────────────────────
+#
+# A crash inside native code (the capture library, onnxruntime, OpenCV) ends
+# the process without a Python error. faulthandler still writes every
+# thread's Python stack to this file, so the next "it crashed" has a cause.
+
+def _enable_crash_log() -> None:
+    import faulthandler
+    import os
+
+    base = os.environ.get("PRESENTIA_DATA_DIR")
+    if not base:
+        return
+    try:
+        logs = os.path.join(base, "logs")
+        os.makedirs(logs, exist_ok=True)
+        path = os.path.join(logs, "engine-crash.log")
+        if os.path.exists(path) and os.path.getsize(path) > 512 * 1024:
+            os.replace(path, path + ".old")
+        f = open(path, "a", encoding="utf-8")  # noqa: SIM115 - kept open for the process
+        f.write(f"\n=== engine started {time.strftime('%Y-%m-%d %H:%M:%S')} pid {os.getpid()} ===\n")
+        f.flush()
+        faulthandler.enable(file=f, all_threads=True)
+        globals()["_CRASH_LOG"] = f
+    except OSError:
+        pass
+
+
+_enable_crash_log()
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
@@ -2163,22 +2194,29 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                         if frame is None:
                             time.sleep(0.2 if state != "ok" else 0.03)
                             continue
+                    own: list = []
+                    if follow is not None:
+                        shown = frame
                     else:
                         shot = sct.grab(region)
-                        frame = np.ascontiguousarray(np.asarray(shot, dtype=np.uint8)[:, :, :3])
+                        shown = np.ascontiguousarray(np.asarray(shot, dtype=np.uint8)[:, :, :3])
                         # The bubble, Live View or the app itself may sit over
                         # the area and are visible to screen grabs: paint them
-                        # out so their faces are not counted again.
-                        frame = _SELF_MASK.apply(frame, region["left"], region["top"])
+                        # out of what is analysed so their faces are not
+                        # counted again. The preview shows them softened.
+                        own = _SELF_MASK.rects()
+                        frame = paint(shown.copy(), region["left"], region["top"], own) if own else shown
                     to_analyse.put(frame)
                     if challenge_on.is_set():
                         # Every preview frame: a blink is over in ~0.2 s.
                         to_challenge.put(frame)
 
-                    h, w = frame.shape[:2]
+                    h, w = shown.shape[:2]
                     k = min(1.0, PREVIEW_MAX_W / float(w))
-                    view = (cv2.resize(frame, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
-                            if k < 1.0 else frame.copy())
+                    view = (cv2.resize(shown, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
+                            if k < 1.0 else shown.copy())
+                    if own:
+                        soften(view, region["left"], region["top"], own, k)
                     boxes = overlay  # swapped atomically by the analysis thread
                     for (x1, y1, x2, y2), label, colour in boxes:
                         p1 = (int(x1 * k), int(y1 * k))
@@ -2241,7 +2279,10 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                     ch = challenge
                     sw = stillness
                 if ch is not None:
-                    hit = next((m for m in matches if m[0] == ch.student_id), None)
+                    # Only a full-strength match proves who is in the tile (a
+                    # partly visible face keeps its name, but proves nothing).
+                    hit = next((m for m in matches if m[0] == ch.student_id
+                                and m[1] >= MATCH_THRESHOLD), None)
                     if hit is not None:
                         ch.note_identified(hit[2])
                 for sid in sw.update(frame, matches):
@@ -2263,7 +2304,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                 with state_lock:
                     pending = verify_student
                 if pending is not None:
-                    hit = next((m for m in matches if m[0] == pending), None)
+                    hit = next((m for m in matches if m[0] == pending and m[1] >= MATCH_THRESHOLD), None)
                     s_id = session_id
                     if hit is not None:
                         with state_lock:

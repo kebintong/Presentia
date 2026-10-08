@@ -1,5 +1,7 @@
 """Keep Presentia's own windows out of what the monitor analyses.
 
+(And show them politely in the preview: see `soften`.)
+
 Presentia's windows (the main window, the floating bubble, Live View, the
 pop-out) are visible to screen recorders and screenshots, so a screen-area
 capture would film them too when they sit over the watched area: Live View
@@ -111,3 +113,40 @@ def _presentia_pids() -> set[int]:
     if raw.isdigit() and int(raw) > 0:
         pids.add(int(raw))
     return pids
+
+
+def soften(view: np.ndarray, left: int, top: int, rects: list[tuple[int, int, int, int]],
+           k: float = 1.0) -> np.ndarray:
+    """For the preview only: show Presentia's own windows blurred and dimmed
+    with a dashed outline and a small label, instead of black boxes, so the
+    instructor sees they are left out without a picture-in-picture tunnel.
+    `view` is the grab scaled by `k`; edits and returns it."""
+    import cv2
+
+    h, w = view.shape[:2]
+    for l, t, r, b in rects:
+        x1, y1 = max(0, int((l - left) * k)), max(0, int((t - top) * k))
+        x2, y2 = min(w, int((r - left) * k)), min(h, int((b - top) * k))
+        rw, rh = x2 - x1, y2 - y1
+        if rw < 6 or rh < 6:
+            continue
+        patch = view[y1:y2, x1:x2]
+        small = cv2.resize(patch, (max(1, rw // 14), max(1, rh // 14)), interpolation=cv2.INTER_AREA)
+        blur = cv2.resize(small, (rw, rh), interpolation=cv2.INTER_LINEAR).astype(np.float32)
+        view[y1:y2, x1:x2] = np.clip(blur * 0.5 + 24, 0, 255).astype(np.uint8)
+        _dashed_rect(view, x1, y1, x2 - 1, y2 - 1, (205, 205, 205))
+        if rw >= 70 and rh >= 22:
+            label = "Presentia"
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+            cx, cy = x1 + (rw - tw) // 2, y1 + (rh + th) // 2
+            cv2.putText(view, label, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (225, 225, 225), 1, cv2.LINE_AA)
+    return view
+
+
+def _dashed_rect(img: np.ndarray, x1: int, y1: int, x2: int, y2: int, colour, dash: int = 5) -> None:
+    for x in range(x1, x2 + 1, dash * 2):
+        img[y1, x:min(x + dash, x2 + 1)] = colour
+        img[y2, x:min(x + dash, x2 + 1)] = colour
+    for y in range(y1, y2 + 1, dash * 2):
+        img[y:min(y + dash, y2 + 1), x1] = colour
+        img[y:min(y + dash, y2 + 1), x2] = colour

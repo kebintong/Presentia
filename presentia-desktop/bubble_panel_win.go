@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"presentia-desktop/internal/bubbleui"
@@ -164,7 +166,7 @@ func bubbleView() bubbleui.View {
 		Active: st.Active, Elapsed: st.Elapsed, Title: title,
 		Present: st.Present, Missing: st.Missing, Waiting: st.Waiting, Total: st.Total, Unknown: st.Unknown,
 		SourceKind: kind, SourceLabel: label, SourceDetail: detail,
-		Pinned: gPinned, PanelOpen: gPanelHwnd != 0, Hover: gPanelHover, Copied: gCopied,
+		PanelOpen: gPanelHwnd != 0 && gPanelAnim.dir >= 0, Hover: gPanelHover, Copied: gCopied,
 	}
 	for _, a := range st.Away {
 		v.Away = append(v.Away, bubbleui.Student{Name: a.Name, Away: a.Away})
@@ -294,13 +296,25 @@ func renderCapsule() {
 	if gCapHover {
 		v.Hover = "capsule"
 	}
+	v.Pulse = gPulse
 	l := bubbleui.RenderCapsule(v, bubbleTheme(), gdiText{}, uiScale())
 	if !fillDIB(l.C, &gCapBmp, &gCapPx, &gCapW, &gCapH) {
 		return
 	}
 	gCapLayout = l
-	pos := capWindowPos(l)
-	pushLayered(h, gCapBmp, gCapW, gCapH, &pos)
+	pushCapsuleFrame()
+}
+
+// pushCapsuleFrame shows the capsule's current picture at the current step
+// of its fade-in (no redraw).
+func pushCapsuleFrame() {
+	if gBubbleHwnd == 0 || gCapLayout == nil || gCapBmp == 0 {
+		return
+	}
+	pos := capWindowPos(gCapLayout)
+	e := easeOutCubic(gCapAnim.p)
+	pos.Y += int32(math.Round((1 - e) * 6 * uiScale()))
+	pushLayeredAlpha(gBubbleHwnd, gCapBmp, gCapW, gCapH, &pos, byte(math.Round(255*e)))
 }
 
 // panelWindowPos puts the panel under the capsule (or above it when there is
@@ -333,20 +347,173 @@ func renderPanel() {
 		return
 	}
 	gPanelLayout = l
-	pos := panelWindowPos(l)
-	pushLayered(h, gPanelBmp, gPanelW, gPanelH, &pos)
+	pushPanelFrame()
+}
+
+// pushPanelFrame shows the panel's current picture at the current step of
+// its open/close animation: it fades in while sliding out of the capsule.
+func pushPanelFrame() {
+	if gPanelHwnd == 0 || gPanelLayout == nil || gPanelBmp == 0 {
+		return
+	}
+	pos := panelWindowPos(gPanelLayout)
+	e := easeOutCubic(gPanelAnim.p)
+	// It starts a little closer to the capsule: above its spot when it
+	// opens downwards, below it when it opens upwards.
+	slide := (1 - e) * 10 * uiScale()
+	if pos.Y+int32(gPanelLayout.BY0) >= gCapBody.Y {
+		slide = -slide
+	}
+	pos.Y += int32(math.Round(slide))
+	pushLayeredAlpha(gPanelHwnd, gPanelBmp, gPanelW, gPanelH, &pos, byte(math.Round(255*e)))
 }
 
 // renderBubble redraws whatever is open.
 func renderBubble() {
+	updatePulse()
 	renderCapsule()
 	renderPanel()
+}
+
+// ── animation ────────────────────────────────────────────────────────────────
+//
+// The capsule fades in when the bubble opens, the panel fades and slides in
+// and out, and the live dot breathes while monitoring. All of it follows the
+// app's Animations setting (Settings → Appearance). Frames only move and fade
+// the already-drawn bitmaps, except the dot, which redraws the capsule a few
+// times a second.
+
+type anim struct {
+	p     float64 // 0 = hidden, 1 = shown
+	from  float64
+	dir   int // +1 showing, -1 hiding, 0 still
+	start time.Time
+}
+
+const (
+	animTimerID  = 9
+	pulseTimerID = 10
+	panelOpenMs  = 180
+	panelCloseMs = 120
+	capFadeMs    = 220
+	pulsePeriod  = 1.6 // seconds per breath
+)
+
+var (
+	gAnimations atomic.Bool
+	gCapAnim    = anim{p: 1}
+	gPanelAnim  = anim{p: 1}
+	gPulse      float64
+	gPulseOn    bool
+	gPulseStart time.Time
+	gAnimTimer  bool
+)
+
+func init() { gAnimations.Store(true) }
+
+// setBubbleAnimationsNative follows the app's Animations switch.
+func setBubbleAnimationsNative(on bool) {
+	gAnimations.Store(on)
+	postToBubble(bWmAppLive)
+}
+
+func easeOutCubic(t float64) float64 {
+	t = clamp01(t)
+	u := 1 - t
+	return 1 - u*u*u
+}
+
+func (a *anim) run(dir int) {
+	if !gAnimations.Load() {
+		a.dir = 0
+		if dir > 0 {
+			a.p = 1
+		} else {
+			a.p = 0
+		}
+		return
+	}
+	a.from, a.dir, a.start = a.p, dir, time.Now()
+	ensureAnimTimer()
+}
+
+// step advances the animation; true while it is still moving.
+func (a *anim) step(ms float64) bool {
+	if a.dir == 0 {
+		return false
+	}
+	t := float64(time.Since(a.start).Milliseconds()) / ms
+	a.p = clamp01(a.from + float64(a.dir)*t)
+	if (a.dir > 0 && a.p >= 1) || (a.dir < 0 && a.p <= 0) {
+		a.dir = 0
+		return false
+	}
+	return true
+}
+
+func ensureAnimTimer() {
+	if !gAnimTimer && gBubbleHwnd != 0 {
+		bSetTimer.Call(gBubbleHwnd, animTimerID, 15, 0)
+		gAnimTimer = true
+	}
+}
+
+// animTick runs one frame (capsule thread, WM_TIMER).
+func animTick() {
+	moving := false
+	if gCapAnim.dir != 0 {
+		moving = gCapAnim.step(capFadeMs) || moving
+		pushCapsuleFrame()
+	}
+	if gPanelAnim.dir != 0 {
+		ms := float64(panelOpenMs)
+		if gPanelAnim.dir < 0 {
+			ms = panelCloseMs
+		}
+		still := gPanelAnim.step(ms)
+		moving = still || moving
+		if !still && gPanelAnim.p <= 0 {
+			destroyPanel() // finished closing
+		} else {
+			pushPanelFrame()
+		}
+	}
+	if !moving && gAnimTimer {
+		bKillTimer.Call(gBubbleHwnd, animTimerID)
+		gAnimTimer = false
+	}
+}
+
+// updatePulse starts or stops the live dot's breathing.
+func updatePulse() {
+	want := gAnimations.Load() && liveSnapshot().Active && gBubbleHwnd != 0
+	if want == gPulseOn {
+		return
+	}
+	gPulseOn = want
+	if want {
+		gPulseStart = time.Now()
+		bSetTimer.Call(gBubbleHwnd, pulseTimerID, 70, 0)
+	} else {
+		bKillTimer.Call(gBubbleHwnd, pulseTimerID)
+		gPulse = 0
+	}
+}
+
+func pulseTick() {
+	t := time.Since(gPulseStart).Seconds() / pulsePeriod
+	gPulse = t - math.Floor(t)
+	renderCapsule()
 }
 
 // ── panel window ─────────────────────────────────────────────────────────────
 
 func openPanel() {
 	if gPanelHwnd != 0 {
+		if gPanelAnim.dir < 0 { // reopened while closing: turn back
+			gPanelAnim.run(+1)
+			renderCapsule()
+		}
 		return
 	}
 	hInst, _, _ := bGetModuleHandleW.Call(0)
@@ -373,11 +540,28 @@ func openPanel() {
 	gPanelHwnd = h
 	gPanelHover, gPanelPress, gPanelTracked = "", "", false
 	excludeFromCapture(h)
+	gPanelAnim = anim{p: 0}
+	gPanelAnim.run(+1)
 	renderBubble()         // the capsule's arrow flips too
 	bShowWindow.Call(h, 4) // SW_SHOWNOACTIVATE
 }
 
+// closePanel tucks the panel away (animated when animations are on).
 func closePanel() {
+	if gPanelHwnd == 0 || gPanelAnim.dir < 0 {
+		return
+	}
+	gPanelHover, gPanelPress = "", ""
+	gPanelAnim.run(-1)
+	if gPanelAnim.dir == 0 { // animations off
+		destroyPanel()
+		return
+	}
+	renderCapsule() // the arrow flips back right away
+}
+
+// destroyPanel removes the panel at once.
+func destroyPanel() {
 	if gPanelHwnd == 0 {
 		return
 	}
@@ -385,6 +569,7 @@ func closePanel() {
 	gPanelHwnd = 0
 	gPanelLayout = nil
 	gPanelHover, gPanelPress = "", ""
+	gPanelAnim = anim{p: 1}
 	if gPanelBmp != 0 {
 		bDeleteObject.Call(gPanelBmp)
 		gPanelBmp, gPanelPx, gPanelW, gPanelH = 0, nil, 0, 0
@@ -393,7 +578,7 @@ func closePanel() {
 }
 
 func togglePanel() {
-	if gPanelHwnd != 0 {
+	if gPanelHwnd != 0 && gPanelAnim.dir >= 0 {
 		closePanel()
 	} else {
 		openPanel()
@@ -456,7 +641,7 @@ func panelWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		}
 		press := gPanelPress
 		gPanelPress = ""
-		if id != "" && id == press {
+		if id != "" && id == press && gPanelAnim.dir >= 0 {
 			panelAction(id)
 		}
 		return 0
@@ -490,9 +675,6 @@ func panelAction(id string) {
 		emitBubbleCmd("bubble:stop")
 	case id == "liveview":
 		toggleLiveView()
-	case id == "pin":
-		togglePin()
-		renderBubble()
 	case id == "app":
 		showMain()
 	case id == "hide":
@@ -554,4 +736,6 @@ func releaseBubbleBitmaps() {
 	}
 	gCapLayout = nil
 	gCapHover, gCapTracked = false, false
+	gAnimTimer, gPulseOn, gPulse = false, false, 0
+	gCapAnim, gPanelAnim = anim{p: 1}, anim{p: 1}
 }

@@ -15,11 +15,23 @@ from typing import Callable
 
 import numpy as np
 
-from app.core.face_engine import FaceEngine
+from app.core.face_engine import MATCH_THRESHOLD, FaceEngine
 
 REFRESH_EVERY = 10.0     # re-verify each face's identity at most this often
 IOU_MATCH = 0.3          # box overlap needed to carry identity forward
 MAX_EMBEDS_PER_PASS = 2  # spread expensive embeddings across passes
+
+# A face only partly in view (turned away, half behind a laptop, cut off by
+# the meeting's toolbar) matches its owner more weakly than a full face.
+# Such a face was being reported as "unknown" while its owner was flagged as
+# missing / camera off. Two rules keep a weaker match on the right student:
+KEEP_SCORE = 0.28        # a face that already has an identity keeps it down to this
+CLAIM_SCORE = 0.32       # a new face can be a student not on screen, at this score…
+CLAIM_MARGIN = 0.08      # …if it beats every other student by this much…
+CLAIM_NEAR = 0.40        # …and is near where they were last seen (share of the frame diagonal)
+CLAIM_RECENT = 600.0     # …within the last 10 minutes
+MISSES_TO_DROP = 3       # failed re-checks in a row before an identity is dropped
+RETRY_SOON = 2.0         # after a weak or failed re-check, look again this soon (s)
 
 
 def _iou(a: tuple, b: tuple) -> float:
@@ -44,9 +56,11 @@ class TileTracker:
         self._engine = engine
         self._get_known = get_known
         self._refresh_every = refresh_every
-        # each track: {uid, bbox, kps, sid, score, emb, embedded_at}
+        # each track: {uid, bbox, kps, sid, score, emb, embedded_at, misses, weak}
         self._tracks: list[dict] = []
         self._uids = itertools.count(1)
+        # where each student was last seen: sid -> (bbox, monotonic time)
+        self._last_seen: dict[int, tuple[tuple, float]] = {}
 
     def reidentify(self) -> None:
         """Re-match cached embeddings against the (updated) known list.
@@ -100,7 +114,7 @@ class TileTracker:
                 next_tracks.append({
                     "uid": next(self._uids),
                     "bbox": bbox, "kps": kps, "sid": None, "score": 0.0,
-                    "emb": None, "embedded_at": None,
+                    "emb": None, "embedded_at": None, "misses": 0, "weak": False,
                 })
 
         # embed new faces first, then the stalest verified ones
@@ -112,12 +126,15 @@ class TileTracker:
         ]
         candidates.sort(key=lambda t: (t["embedded_at"] is not None,
                                        t["embedded_at"] or 0.0))
+        diag = float(np.hypot(*frame.shape[:2])) or 1.0
         for t in candidates[:MAX_EMBEDS_PER_PASS]:
             t["emb"] = self._engine.embed_face(frame, t["bbox"], t["kps"])
-            match = FaceEngine.identify(t["emb"], known)
-            t["sid"], t["score"] = match if match else (None, 0.0)
-            t["embedded_at"] = now
+            on_screen = {o["sid"] for o in next_tracks if o is not t and o["sid"] is not None}
+            self._decide(t, rank_top2(t["emb"], known), on_screen, now, diag)
 
+        for t in next_tracks:
+            if t["sid"] is not None:
+                self._last_seen[t["sid"]] = (t["bbox"], now)
         self._tracks = next_tracks
 
         # report each student once (best score), like analyze_all
@@ -132,3 +149,55 @@ class TileTracker:
                 best[t["sid"]] = t
         matches = [(sid, t["score"], t["bbox"]) for sid, t in best.items()]
         return matches, unknowns
+
+    def _decide(self, t: dict, ranked: list[tuple[int, float]], on_screen: set[int],
+                now: float, diag: float) -> None:
+        """Set a track's identity from a fresh embedding (see KEEP_SCORE etc.)."""
+        t["embedded_at"] = now
+        best_sid, best = ranked[0] if ranked else (None, -1.0)
+        second = ranked[1][1] if len(ranked) > 1 else -1.0
+        had = t.get("sid")
+
+        if best_sid is not None and best >= MATCH_THRESHOLD:
+            t["sid"], t["score"], t["misses"], t["weak"] = best_sid, best, 0, False
+            return
+        if had is not None and best_sid == had and best >= KEEP_SCORE:
+            # Same person, seen less well (turned, half hidden): keep them.
+            t["score"], t["misses"], t["weak"] = best, 0, True
+            t["embedded_at"] = now - self._refresh_every + RETRY_SOON
+            return
+        if had is not None and t.get("misses", 0) + 1 < MISSES_TO_DROP:
+            # One bad look is not enough to lose someone: check again soon.
+            t["misses"] = t.get("misses", 0) + 1
+            t["weak"] = True
+            t["embedded_at"] = now - self._refresh_every + RETRY_SOON
+            return
+        if (best_sid is not None and best >= CLAIM_SCORE and best - second >= CLAIM_MARGIN
+                and best_sid not in on_screen and self._near_last(best_sid, t["bbox"], now, diag)):
+            # A new, partly visible face where a missing student just was.
+            t["sid"], t["score"], t["misses"], t["weak"] = best_sid, best, 0, True
+            t["embedded_at"] = now - self._refresh_every + RETRY_SOON
+            return
+        t["sid"], t["score"], t["misses"], t["weak"] = None, 0.0, 0, False
+
+    def _near_last(self, sid: int, bbox: tuple, now: float, diag: float) -> bool:
+        last = self._last_seen.get(sid)
+        if last is None:
+            return False
+        (x1, y1, x2, y2), at = last
+        if now - at > CLAIM_RECENT:
+            return False
+        bx1, by1, bx2, by2 = bbox
+        d = np.hypot((x1 + x2 - bx1 - bx2) / 2, (y1 + y2 - by1 - by2) / 2)
+        return d <= CLAIM_NEAR * diag
+
+
+def rank_top2(embedding: np.ndarray, known: list[tuple[int, np.ndarray]]) -> list[tuple[int, float]]:
+    """The two best (student_id, score) for an embedding, best first; one
+    entry per student (their best enrolled picture)."""
+    best: dict[int, float] = {}
+    for sid, emb in known:
+        sc = float(np.dot(embedding, emb))
+        if sc > best.get(sid, -2.0):
+            best[sid] = sc
+    return sorted(best.items(), key=lambda kv: -kv[1])[:2]

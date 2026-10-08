@@ -67,10 +67,11 @@ type View struct {
 	SourceLabel  string
 	SourceDetail string
 
-	Pinned    bool
 	PanelOpen bool
 	Hover     string // id of the control under the pointer
 	Copied    string // id of the copy button just used
+	// Pulse (0..1) animates the live dot's halo; 0 draws it at rest.
+	Pulse float64
 }
 
 // Hit is a clickable area, in canvas pixels.
@@ -378,7 +379,8 @@ func RenderCapsule(v View, th Theme, t Text, s float64) *Layout {
 		case "icon":
 			c.Icon(it.s, x, cy-7*s, 14*s, 2*s, it.col)
 		case "dot":
-			c.Disc(x+4*s, cy, 6.5*s, it.col, 0.25)
+			// A soft ring breathes out of the live dot.
+			c.Disc(x+4*s, cy, (5.5+4*v.Pulse)*s, it.col, 0.32*(1-v.Pulse))
 			c.Disc(x+4*s, cy, 4*s, it.col, 1)
 		case "sep":
 			c.RoundRect(x, cy-7*s, x+1*s, cy+7*s, 0, Solid(Mix(it.col, th.Panel.First(), 0.55)), 1)
@@ -487,12 +489,9 @@ func RenderPanel(v View, th Theme, t Text, s float64) *Layout {
 	// Footer.
 	fy := y1 - footH
 	p.hline(x0+bw, x1-bw, fy, th.Divider, divW)
-	pin := "On top"
-	if v.Pinned {
-		pin = "Unpin app"
-	}
+	// The bubble is always on top already; the footer only leaves it.
 	items := []struct{ id, icon, label string }{
-		{"pin", "pin", pin}, {"app", "app", "Open app"}, {"hide", "x", "Hide bubble"},
+		{"app", "app", "Open Presentia"}, {"hide", "x", "Hide bubble"},
 	}
 	ff := Font{11 * s, true}
 	cw := (bx1 - bx0) / float64(len(items))
@@ -508,9 +507,6 @@ func RenderPanel(v View, th Theme, t Text, s float64) *Layout {
 		tot := isz + 5*s + lw
 		lx := (ix0+ix1)/2 - tot/2
 		col := th.Muted
-		if it.id == "pin" && v.Pinned {
-			col = th.Icon
-		}
 		c.Icon(it.icon, lx, (iy0+iy1)/2-isz/2, isz, 1.8*s, col)
 		t.Draw(c, ff, it.label, lx+isz+5*s, iy0, ix1, iy1, Left, col)
 		hits = append(hits, Hit{it.id, ix0, iy0, ix1, iy1})
@@ -530,7 +526,7 @@ func (p *painter) idleBody(bx0, bx1, y float64, hits *[]Hit) float64 {
 	ib := 30 * s
 	ix := bx0 + 10*s
 	iy := y + (rh-ib)/2
-	icon, l1, l2 := "area", "Nothing picked yet", "Pick the meeting's video tiles or its window"
+	icon, l1, l2 := "area", "Nothing picked yet", "Video tiles or the meeting window"
 	if v.SourceKind != "" {
 		icon, l1, l2 = v.SourceKind, v.SourceLabel, v.SourceDetail
 		c.RoundRect(ix, iy, ix+ib, iy+ib, p.r(8), th.Accent, 0.18)

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import AlertList, { makeAlert } from '../components/AlertList'
+import AlertList from '../components/AlertList'
 import RosterList from '../components/RosterList'
 import VideoCanvas from '../components/VideoCanvas'
 import {
@@ -8,14 +8,13 @@ import {
   OpenBubble, CloseBubble,
 } from '../../wailsjs/go/main/App'
 import { setBubbleHandler, rememberSource, rememberedSource, tellBubbleSource, type BubbleCmd } from '../bubbleBridge'
-import { useFrameFeed, type Frame } from '../components/frameFeed'
+import { useMonitor, monitorFeed, addMonitorAlert, startMonitor, sendMonitor, stopMonitor, setMonitorPageHandler } from '../monitorSession'
 import { ClassInfo, classLabel } from '../classes'
 import VerifyDialog, { CheckState, VerifyStudent, newCheck } from '../components/VerifyDialog'
 
 const API = 'http://127.0.0.1:7788'
 // Bindings added after the generated wailsjs files; called defensively.
 const goApp = () => (window as any)['go']?.['main']?.['App']
-const WS  = 'ws://127.0.0.1:7788'
 
 type RosterStudent = VerifyStudent
 
@@ -109,31 +108,23 @@ const sourcePicked = (text: string) => {
 export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
   const [sessionName, setSessionName]   = useState('')
   const [missingAfter, setMissingAfter] = useState(5)
-  const [monitoring, setMonitoring]     = useState(false)
-  // How the selected window is being captured, and whether that is paused.
-  const [capture, setCapture]           = useState<{ state: string; method: string } | null>(null)
-  const [sessionId, setSessionId]       = useState<number | null>(null)
-  // Live frames go straight from the socket to the canvas (see frameFeed);
-  // React only tracks whether there is a picture at all.
-  const feed = useFrameFeed()
-  const [hasFrame, setHasFrame]         = useState(false)
-  const setFrame = useCallback((f: Frame) => {
-    feed.push(f)
-    setHasFrame(f !== null)
-  }, [feed])
+  // The running monitor lives outside this page (monitorSession.ts), so it
+  // keeps going while the instructor looks at other pages.
+  const mon = useMonitor()
+  const { monitoring, capture, hasFrame } = mon
+  const roster = mon.roster as RosterStudent[]
+  const unknowns = mon.unknowns as UnknownFace[]
+  const alerts = mon.alerts as AlertItem[]
+  const feed = monitorFeed
   // What to watch survives leaving the page (bubbleBridge.ts).
   const [region, setRegion]             = useState<Region | null>(() => rememberedSource<Source>()?.region ?? null)
   // A small picture of the picked screen area, so it is plain what is watched.
   const [regionThumb, setRegionThumb]   = useState<string | null>(() => rememberedSource<Source>()?.thumb ?? null)
-  const [roster, setRoster]             = useState<RosterStudent[]>([])
-  const [unknowns, setUnknowns]         = useState<UnknownFace[]>([])
-  const [alerts, setAlerts]             = useState<AlertItem[]>([])
   const [enrollDialog, setEnrollDialog] = useState<EnrollDialog | null>(null)
   const [verifyingId, setVerifyingId]   = useState<number | null>(null)
   const [verifyPrompt, setVerifyPrompt] = useState('')
   // Verify dialog for one student (liveness check / quick re-check).
   const [check, setCheck]               = useState<CheckState | null>(null)
-  const wsRef = useRef<WebSocket | null>(null)
 
   // Native bubble state
   const [bubbleOpen, setBubbleOpen]   = useState(false)
@@ -151,7 +142,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
   const overlayRef = useRef<HTMLDivElement>(null)
 
   const addAlert = (message: string, level: AlertItem['level']) => {
-    setAlerts((prev) => [makeAlert(message, level), ...prev].slice(0, 100))
+    addMonitorAlert(message, level)
   }
 
   // ── Native bubble ─────────────────────────────────────────────────
@@ -327,105 +318,44 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
       addAlert('Select a screen area or window first — use the bubble menu.', 'warn')
       return
     }
-    const ws = new WebSocket(`${WS}/ws/screen`)
-    ws.binaryType = 'arraybuffer' // preview frames arrive as raw JPEG bytes
-    wsRef.current = ws
-    ws.onopen = () => {
-      const name = sessionName.trim() || `Meet ${new Date().toLocaleString()}`
-      // class_id: only this class's roster is matched and the session is
-      // filed under it.
-      ws.send(JSON.stringify({
-        action: 'start', region, name, missing_after: missingAfter, class_id: classInfo.id,
-      }))
-    }
-    ws.onmessage = (ev) => {
-      if (typeof ev.data !== 'string') {
-        setFrame(ev.data as ArrayBuffer)
-        return
-      }
-      const data = JSON.parse(ev.data)
-      if (data.type === 'started') {
-        setSessionId(data.session_id); setMonitoring(true)
-        addAlert(`Monitoring started: "${sessionName || 'Meet session'}"`, 'ok')
-      } else if (data.type === 'frame') {
-        // Live preview (~24 fps). The sidecar draws the latest name + score
-        // boxes on it; showing it is how the instructor sees what is matched.
-        if (data.jpeg) setFrame(data.jpeg)
-        // Older sidecars sent roster data with every frame.
-        if (data.roster) setRoster(data.roster)
-        if (data.unknowns) setUnknowns(data.unknowns.map((u: any, i: number) => ({ ...u, index: i })))
-      } else if (data.type === 'analysis') {
-        // Recognition results arrive separately, at the analysis rate.
-        setRoster(data.roster || [])
-        setUnknowns((data.unknowns || []).map((u: any, i: number) => ({ ...u, index: i })))
-      } else if (data.type === 'alert') {
-        addAlert(data.message, data.level)
-      } else if (data.type === 'capture') {
-        setCapture({ state: data.state, method: data.method })
-      } else if (data.type === 'enrolled') {
-        addAlert(`${data.name} enrolled from meeting.`, 'ok')
-      } else if (data.type === 'verify_started') {
-        setVerifyPrompt('Re-checking face against the enrolled photo…')
-      } else if (data.type === 'verify_result') {
-        setVerifyingId(null)
-        setVerifyPrompt('')
-        addAlert(data.message, data.ok ? 'ok' : 'error')
-      } else if (data.type === 'challenge_started') {
-        setCheck((c) => c && c.student.id === data.student_id
-          ? { ...c, phase: 'running', instructions: data.instructions, chatText: data.chat_text,
-              prompt: '', step: 1, steps: data.instructions.length + 1, result: null, error: '' }
-          : c)
-      } else if (data.type === 'challenge') {
-        setCheck((c) => c && c.student.id === data.student_id && c.phase === 'running'
-          ? { ...c, prompt: data.prompt, step: data.step, steps: data.steps,
-              faceFound: data.face_found, smallFace: data.small_face,
-              secondsLeft: data.seconds_left, result: data.result,
-              phase: data.result ? 'done' : 'running' }
-          : c)
-      } else if (data.type === 'stopped') {
-        setCheck(null)
-        setMonitoring(false); setSessionId(null); setFrame(null); setCapture(null)
-        addAlert('Monitoring stopped. Attendance recorded.', 'info')
-        ws.close()
-      } else if (data.type === 'error') {
-        addAlert(`Error: ${data.message}`, 'error')
-        // A check that could not start goes back to the choice screen.
-        setCheck((c) => c && c.phase === 'starting' ? { ...c, phase: 'choose', error: data.message } : c)
-      }
-    }
-    ws.onclose = () => { setMonitoring(false); setFrame(null); setCapture(null) }
-    ws.onerror = () => addAlert('WebSocket connection error', 'error')
+    const name = sessionName.trim() || `Meet ${new Date().toLocaleString()}`
+    // class_id: only this class's roster is matched and the session is
+    // filed under it.
+    startMonitor({ region, name, missing_after: missingAfter, class_id: classInfo.id },
+                 sessionName || 'Meet session')
   }, [region, sessionName, missingAfter, classInfo.id])
 
-  const sendWs = (payload: Record<string, unknown>) => {
-    const ws = wsRef.current
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(payload))
-      return true
-    }
-    return false
-  }
+  const sendWs = (payload: Record<string, unknown>) => sendMonitor(payload)
 
-  const stopMonitoring = () => {
-    if (!sendWs({ action: 'stop' })) {
-      setMonitoring(false)
-      setFrame(null)
-    }
-  }
+  const stopMonitoring = () => stopMonitor()
 
-  // Monitoring must not keep running after the user leaves the page.
-  useEffect(() => {
-    return () => {
-      const ws = wsRef.current
-      if (ws) {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ action: 'stop' }))
-        }
-        ws.close()
-        wsRef.current = null
-      }
+  // Messages only this page shows: the liveness check and re-verify prompt.
+  // (Leaving the page no longer stops monitoring.)
+  useEffect(() => setMonitorPageHandler((data) => {
+    if (data.type === 'verify_started') {
+      setVerifyPrompt('Re-checking face against the enrolled photo…')
+    } else if (data.type === 'verify_result') {
+      setVerifyingId(null)
+      setVerifyPrompt('')
+    } else if (data.type === 'challenge_started') {
+      setCheck((c) => c && c.student.id === data.student_id
+        ? { ...c, phase: 'running', instructions: data.instructions, chatText: data.chat_text,
+            prompt: '', step: 1, steps: data.instructions.length + 1, result: null, error: '' }
+        : c)
+    } else if (data.type === 'challenge') {
+      setCheck((c) => c && c.student.id === data.student_id && c.phase === 'running'
+        ? { ...c, prompt: data.prompt, step: data.step, steps: data.steps,
+            faceFound: data.face_found, smallFace: data.small_face,
+            secondsLeft: data.seconds_left, result: data.result,
+            phase: data.result ? 'done' : 'running' }
+        : c)
+    } else if (data.type === 'stopped') {
+      setCheck(null)
+    } else if (data.type === 'error') {
+      // A check that could not start goes back to the choice screen.
+      setCheck((c) => c && c.phase === 'starting' ? { ...c, phase: 'choose', error: data.message } : c)
     }
-  }, [])
+  }), [])
 
   const enrollUnknown = (u: UnknownFace) => setEnrollDialog({ unknown: u, studentNo: '', name: '' })
 

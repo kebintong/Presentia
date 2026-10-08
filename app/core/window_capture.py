@@ -245,12 +245,20 @@ class WgcCapture:
         self._at = 0.0           # monotonic time of the newest frame
         self._copied_at = 0.0
         self._closed = False     # the window went away / capture ended
+        self._stopping = False   # close() asked the capture thread to end
         self._control = None
         self.error = ""
         self.border = True       # Windows 10 always draws a yellow capture border
 
     # The callbacks run on the capture thread.
-    def _on_frame(self, frame, control) -> None:  # noqa: ARG002
+    def _on_frame(self, frame, control) -> None:
+        if self._stopping:
+            # End the capture from its own thread: stopping it from another
+            # thread while a frame is being handed over can abort the whole
+            # engine process (a crash in the capture library), which is how
+            # monitoring died when the instructor changed pages.
+            control.stop()
+            return
         now = time.monotonic()
         # Meetings can repaint 60 times a second; copying every one wastes CPU
         # the face engine needs. Keep up to max_fps.
@@ -341,11 +349,21 @@ class WgcCapture:
         except Exception:  # noqa: BLE001
             return False
 
+    STOP_WAIT = 1.0  # s for the capture thread to end itself
+
     def close(self) -> None:
         control, self._control = self._control, None
+        self._stopping = True
         if control is not None:
+            # Usually the next frame ends it (see _on_frame). A window whose
+            # picture does not change sends no frames, so after a moment it
+            # is stopped from here instead.
+            deadline = time.monotonic() + self.STOP_WAIT
             try:
-                control.stop()
+                while time.monotonic() < deadline and not control.is_finished():
+                    time.sleep(0.02)
+                if not control.is_finished():
+                    control.stop()
             except Exception:  # noqa: BLE001
                 pass
         with self._lock:

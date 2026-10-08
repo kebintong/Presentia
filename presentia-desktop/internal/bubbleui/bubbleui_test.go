@@ -67,6 +67,11 @@ func TestCapsuleStates(t *testing.T) {
 		if !(live.BX1-live.BX0 > idle.BX1-idle.BX0) {
 			t.Fatalf("%s: live capsule should be wider than idle", k)
 		}
+		// The live dot's pulse changes the picture but not the size.
+		pulsed := RenderCapsule(View{Active: true, Elapsed: 724, Present: 18, Total: 24, Missing: 2, Pulse: 0.5}, th, boxText{}, 1)
+		if pulsed.C.W != live.C.W || pulsed.C.H != live.C.H {
+			t.Fatalf("%s: pulse must not resize the capsule", k)
+		}
 		// HiDPI doubles everything.
 		big := RenderCapsule(View{}, th, boxText{}, 2)
 		if big.C.W < idle.C.W*2-2 {
@@ -78,16 +83,16 @@ func TestCapsuleStates(t *testing.T) {
 func TestPanelControls(t *testing.T) {
 	th := ThemeFor("dark")
 	none := RenderPanel(View{}, th, boxText{}, 1)
-	if ids(none) != "close,area,window,pin,app,hide" { // Start is disabled: no hit
+	if ids(none) != "close,area,window,app,hide" { // Start is disabled: no hit
 		t.Fatalf("idle hits = %s", ids(none))
 	}
 	ready := RenderPanel(View{SourceKind: "window", SourceLabel: "Meet - CS101", SourceDetail: "Google Chrome"}, th, boxText{}, 1)
-	if ids(ready) != "close,area,window,start,pin,app,hide" {
+	if ids(ready) != "close,area,window,start,app,hide" {
 		t.Fatalf("ready hits = %s", ids(ready))
 	}
 	away := []Student{{"Juan Dela Cruz", 130}, {"Ben Tan", 65}, {"A", 1}, {"B", 2}, {"C", 3}, {"D", 4}}
 	live := RenderPanel(View{Active: true, Elapsed: 724, Present: 18, Total: 24, Missing: 6, Away: away}, th, boxText{}, 1)
-	want := "close,copy:0,copy:1,copy:2,copy:3,liveview,stop,pin,app,hide"
+	want := "close,copy:0,copy:1,copy:2,copy:3,liveview,stop,app,hide"
 	if ids(live) != want {
 		t.Fatalf("live hits = %s", ids(live))
 	}

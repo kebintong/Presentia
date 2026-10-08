@@ -4,6 +4,7 @@ import { switchTheme } from './themeTransition'
 import { ThemeKey, loadTheme, saveTheme, themeInfo } from './themes'
 import { applyHideFromCapture, loadHideFromCapture } from './captureVisibility'
 import { listenToBubble, clearPendingBubbleCmds, rememberSource, tellBubbleSource } from './bubbleBridge'
+import { getMonitorState, stopMonitor, clearMonitorAlerts, listenEngineEvents } from './monitorSession'
 import Sidebar from './components/Sidebar'
 import SettingsPanel, { UpdateInfo, Tab as SettingsTab } from './components/SettingsPanel'
 import type { ReleaseNote } from './components/UpdateHistory'
@@ -48,6 +49,9 @@ export default function App() {
 
   const switchClass = () => setActiveClass(null)
 
+  // The engine restarting itself after a crash is reported in Activity.
+  useEffect(() => listenEngineEvents(), [])
+
   // The bubble's buttons work from any page: a command arriving while the
   // Monitor page is closed opens it (bubbleBridge.ts).
   const activeClassRef = useRef<ClassInfo | null>(null)
@@ -62,7 +66,15 @@ export default function App() {
   }), [])
 
   // A different class (or none): the picked area belonged to the old one.
+  // Monitoring keeps running across pages, but not into another class.
   useEffect(() => {
+    const mon = getMonitorState()
+    if (activeClass && mon.classId !== null && mon.classId !== activeClass.id) {
+      if (mon.monitoring || mon.connecting) stopMonitor()
+      clearMonitorAlerts()
+    } else if (mon.monitoring || mon.connecting) {
+      return // still monitoring this class: keep what it watches
+    }
     rememberSource(null)
     tellBubbleSource('', '', '', activeClass ? classLabel(activeClass) : '')
   }, [activeClass?.id])
@@ -110,6 +122,8 @@ export default function App() {
 
   useLayoutEffect(() => {
     document.documentElement.setAttribute('data-motion', animations ? 'on' : 'off')
+    // The floating bubble's fades and live-dot pulse follow the same switch.
+    goApp()?.['SetBubbleAnimations']?.(animations)
   }, [animations])
 
   const toggleAnimations = () => {

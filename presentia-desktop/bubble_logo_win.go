@@ -61,6 +61,11 @@ func newDIB(w, h int32) (uintptr, []byte) {
 // pushLayered hands a premultiplied DIB to a layered window. A nil pos keeps
 // the window where it is.
 func pushLayered(hwnd, hbm uintptr, w, h int32, pos *bPOINT) {
+	pushLayeredAlpha(hwnd, hbm, w, h, pos, 255)
+}
+
+// pushLayeredAlpha is pushLayered with an overall opacity (for fades).
+func pushLayeredAlpha(hwnd, hbm uintptr, w, h int32, pos *bPOINT, alpha byte) {
 	mem, _, _ := bCreateCompatibleDC.Call(0)
 	if mem == 0 {
 		return
@@ -68,7 +73,7 @@ func pushLayered(hwnd, hbm uintptr, w, h int32, pos *bPOINT) {
 	old, _, _ := bSelectObject.Call(mem, hbm)
 	size := bSIZE{w, h}
 	var origin bPOINT
-	blend := bBLENDFUNCTION{SourceConstantAlpha: 255, AlphaFormat: bAcSrcAlpha}
+	blend := bBLENDFUNCTION{SourceConstantAlpha: alpha, AlphaFormat: bAcSrcAlpha}
 	bUpdateLayeredWindow.Call(hwnd, 0, uintptr(unsafe.Pointer(pos)), uintptr(unsafe.Pointer(&size)), mem,
 		uintptr(unsafe.Pointer(&origin)), 0, uintptr(unsafe.Pointer(&blend)), bUlwAlpha)
 	bSelectObject.Call(mem, old)

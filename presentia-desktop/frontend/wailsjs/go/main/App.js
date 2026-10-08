@@ -94,6 +94,10 @@ export function SetAlwaysOnTop(arg1, arg2) {
   return window['go']['main']['App']['SetAlwaysOnTop'](arg1, arg2);
 }
 
+export function SetBubbleAnimations(arg1) {
+  return window['go']['main']['App']['SetBubbleAnimations'](arg1);
+}
+
 export function SetBubbleSource(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SetBubbleSource'](arg1, arg2, arg3, arg4);
 }

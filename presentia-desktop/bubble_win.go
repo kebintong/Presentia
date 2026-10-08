@@ -297,6 +297,15 @@ func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		renderBubble() // theme changed, or new monitoring stats / source
 		return 0
 
+	case bWmTimer:
+		switch wParam {
+		case animTimerID:
+			animTick()
+		case pulseTimerID:
+			pulseTick()
+		}
+		return 0
+
 	case bWmLButtonDown:
 		// Only the visible capsule counts (the window also holds its shadow).
 		if gCapLayout == nil || gCapLayout.HitAt(float64(loWord(lParam)), float64(hiWord(lParam))) == "" {
@@ -384,7 +393,9 @@ func bubbleWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		// Posted by CloseFloatingBubble from the Wails thread. Destroying the
 		// windows has to happen HERE, on the thread that created them —
 		// Windows rejects a cross-thread DestroyWindow.
-		closePanel()
+		bKillTimer.Call(hwnd, animTimerID)
+		bKillTimer.Call(hwnd, pulseTimerID)
+		destroyPanel()
 		bDestroyWindow.Call(hwnd)
 		return 0
 
@@ -513,7 +524,10 @@ func OpenFloatingBubble(a *App) {
 		gBubbleMu.Unlock()
 
 		// A layered window stays invisible until it is given its first picture.
-		renderCapsule()
+		// It fades in (when animations are on).
+		gCapAnim = anim{p: 0}
+		gCapAnim.run(+1)
+		renderBubble()
 		bShowWindow.Call(hwnd, 4) // SW_SHOWNOACTIVATE
 
 		// Bubble mode: the app lives in the tray. Only hide once the bubble

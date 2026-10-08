@@ -18,3 +18,4 @@ func bubbleSourcePicked(text string)                          {}
 func setBubbleThemeKeyNative(key string)                      {}
 func setBubbleSourceNative(kind, label, detail, title string) {}
 func bubbleIsOpenNative() bool                                { return false }
+func setBubbleAnimationsNative(on bool)                       {}

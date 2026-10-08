@@ -26,3 +26,18 @@ def test_off_windows_is_a_no_op():
         frame = np.zeros((10, 10, 3), np.uint8)
         assert m.rects() == []
         assert m.apply(frame, 0, 0) is frame
+
+
+def test_soften_blurs_dims_and_outlines_only_the_window():
+    from app.core.self_mask import soften
+
+    rnd = np.random.default_rng(1)
+    view = rnd.integers(0, 255, (200, 300, 3), dtype=np.uint8)
+    before = view.copy()
+    # A window at screen (1100, 540)-(1300, 640); the grab starts at (1000, 500), shown at half size.
+    soften(view, 1000, 500, [(1100, 540, 1300, 640)], 0.5)
+    inside = view[25:45, 55:145].astype(int)
+    assert inside.std() < before[25:45, 55:145].astype(int).std() / 2  # blurred
+    assert inside.mean() < 160                                           # dimmed
+    assert (view[:18] == before[:18]).all() and (view[:, :48] == before[:, :48]).all()
+    assert (view[20, 50:55] == 205).all()                                 # dashed outline starts at the corner

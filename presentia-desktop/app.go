@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -21,6 +22,9 @@ const sidecarURL = "http://127.0.0.1:" + sidecarPort
 type App struct {
 	ctx     context.Context
 	sidecar *exec.Cmd
+
+	newSidecar func() *exec.Cmd // builds the sidecar command (see startup)
+	quitting   atomic.Bool      // the app is closing: a sidecar exit is expected
 }
 
 // NewApp creates the App struct.
@@ -144,32 +148,19 @@ func (a *App) startup(ctx context.Context) {
 	env = append(env, fmt.Sprintf("PRESENTIA_PARENT_PID=%d", os.Getpid()))
 	cmd.Env = env
 
-	// Redirect sidecar output to log files and hide its console window on Windows.
-	tmpDir := os.TempDir()
-	stdoutLog, err := os.Create(filepath.Join(tmpDir, "presentia-sidecar-stdout.log"))
-	if err == nil {
-		cmd.Stdout = stdoutLog
+	// A fresh copy of the command for each (re)start: an exec.Cmd runs once.
+	template := cmd
+	a.newSidecar = func() *exec.Cmd {
+		c := exec.Command(template.Path, template.Args[1:]...)
+		c.Dir, c.Env = template.Dir, template.Env
+		return c
 	}
-	stderrLog, err := os.Create(filepath.Join(tmpDir, "presentia-sidecar-stderr.log"))
-	if err == nil {
-		cmd.Stderr = stderrLog
-	}
-
-	// Hide the sidecar's console window (Windows only; a no-op elsewhere).
-	// The flags live in a build-tagged file because syscall.SysProcAttr has
-	// no HideWindow/CreationFlags fields on Linux, which broke the Linux build.
-	hideConsoleWindow(cmd)
-
-	if err := cmd.Start(); err != nil {
+	if err := a.launchSidecar(); err != nil {
 		wailsruntime.LogError(ctx, "Failed to start Python sidecar: "+err.Error())
 		return
 	}
-	a.sidecar = cmd
-
-	// Tie the sidecar's lifetime to ours at the OS level. Without this, a
-	// crash or an End Task leaves presentia-sidecar.exe running, holding the
-	// install folder open so upgrades and uninstalls fail with "file in use".
-	superviseChild(cmd.Process.Pid)
+	cmd = a.sidecar
+	go a.watchSidecar()
 	wailsruntime.LogInfo(ctx, "Python sidecar started (pid "+fmt.Sprint(cmd.Process.Pid)+")")
 
 	// Poll until the sidecar health endpoint responds (up to 120 s for model load)
@@ -236,8 +227,104 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 	return false
 }
 
+// launchSidecar starts the engine process, with its output in log files.
+// The logs of the run before are kept as *.previous.log, so a crash that
+// made Presentia restart can still be looked into.
+func (a *App) launchSidecar() error {
+	cmd := a.newSidecar()
+	tmpDir := os.TempDir()
+	openLog := func(name string) *os.File {
+		path := filepath.Join(tmpDir, name+".log")
+		if st, err := os.Stat(path); err == nil && st.Size() > 0 {
+			_ = os.Rename(path, filepath.Join(tmpDir, name+".previous.log"))
+		}
+		f, err := os.Create(path)
+		if err != nil {
+			return nil
+		}
+		return f
+	}
+	if f := openLog("presentia-sidecar-stdout"); f != nil {
+		cmd.Stdout = f
+	}
+	if f := openLog("presentia-sidecar-stderr"); f != nil {
+		cmd.Stderr = f
+	}
+
+	// Hide the sidecar's console window (Windows only; a no-op elsewhere).
+	// The flags live in a build-tagged file because syscall.SysProcAttr has
+	// no HideWindow/CreationFlags fields on Linux, which broke the Linux build.
+	hideConsoleWindow(cmd)
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	a.sidecar = cmd
+
+	// Tie the sidecar's lifetime to ours at the OS level. Without this, a
+	// crash or an End Task leaves presentia-sidecar.exe running, holding the
+	// install folder open so upgrades and uninstalls fail with "file in use".
+	superviseChild(cmd.Process.Pid)
+	return nil
+}
+
+// watchSidecar restarts the engine if it stops while the app is open (a
+// crash in native code ends it without warning). The page is told, so it can
+// say that monitoring has to be started again. At most a few restarts in a
+// short time: an engine that keeps crashing is left stopped.
+func (a *App) watchSidecar() {
+	var recent []time.Time
+	for {
+		cmd := a.sidecar
+		if cmd == nil {
+			return
+		}
+		err := cmd.Wait()
+		if a.quitting.Load() {
+			return
+		}
+		msg := "exited"
+		if err != nil {
+			msg = err.Error()
+		}
+		if a.ctx != nil {
+			wailsruntime.LogError(a.ctx, "Python sidecar stopped unexpectedly: "+msg)
+		}
+		now := time.Now()
+		kept := recent[:0]
+		for _, t := range recent {
+			if now.Sub(t) < 10*time.Minute {
+				kept = append(kept, t)
+			}
+		}
+		recent = kept
+		if len(recent) >= 4 {
+			if a.ctx != nil {
+				wailsruntime.EventsEmit(a.ctx, "sidecar:failed", msg)
+			}
+			return
+		}
+		recent = append(recent, now)
+		time.Sleep(time.Second)
+		if a.quitting.Load() {
+			return
+		}
+		if err := a.launchSidecar(); err != nil {
+			if a.ctx != nil {
+				wailsruntime.LogError(a.ctx, "Could not restart the sidecar: "+err.Error())
+				wailsruntime.EventsEmit(a.ctx, "sidecar:failed", err.Error())
+			}
+			return
+		}
+		if a.ctx != nil {
+			wailsruntime.EventsEmit(a.ctx, "sidecar:restarted", msg)
+		}
+	}
+}
+
 // shutdown is called when the app is about to exit. It kills the Python sidecar.
 func (a *App) shutdown(ctx context.Context) {
+	a.quitting.Store(true)
 	if a.sidecar != nil && a.sidecar.Process != nil {
 		wailsruntime.LogInfo(ctx, "Shutting down Python sidecar…")
 		_ = a.sidecar.Process.Kill()
@@ -484,6 +571,12 @@ func (a *App) SetBubbleStyle(iridescent bool) {
 // light, brutal, editorial, bento, iri, dark.
 func (a *App) SetBubbleThemeKey(key string) {
 	setBubbleThemeKeyNative(key)
+}
+
+// SetBubbleAnimations follows Settings → Appearance → Animations: the
+// bubble's fades, slides and the live dot's pulse.
+func (a *App) SetBubbleAnimations(on bool) {
+	setBubbleAnimationsNative(on)
 }
 
 // SetBubbleSource tells the bubble what the Monitor page will watch (kind is
