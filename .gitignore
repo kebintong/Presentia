@@ -39,7 +39,11 @@ models/
 !/build/BUILD.md
 !/build/set-version.ps1
 !/build/smoke-test-engine.ps1
+!/build/release_notes.py
 
 # Wails compiles the desktop exe here.
 presentia-desktop/build/bin/
 presentia-desktop/presentia-desktop.exe
+
+# The release text the Release workflow writes (from RELEASE_NOTES.md).
+/release-notes.md

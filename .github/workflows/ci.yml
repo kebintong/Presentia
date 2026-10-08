@@ -115,6 +115,10 @@ jobs:
       - name: Build
         run: go build -tags desktop,production -ldflags "-H windowsgui" -o build/bin/Presentia-ci.exe .
 
+      # The bubble's drawing (capsule and panel in all six themes).
+      - name: Go tests (bubble)
+        run: go test -count=1 ./internal/...
+
   website:
     name: Registration website
     runs-on: ubuntu-latest

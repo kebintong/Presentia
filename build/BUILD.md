@@ -152,19 +152,25 @@ and every pause/resume.
 
 Releases are built on GitHub, not on your PC (`.github/workflows/release.yml`):
 
-1. Make sure the latest commit on `main` has a **green check** (Actions tab).
-2. GitHub → **Actions** → **Release** → **Run workflow** → branch `main`, type the version (e.g. `1.5.4`) →
-   **Run workflow**.
+1. Make sure the latest commit on `main` has a **green check** (Actions tab), and that **`RELEASE_NOTES.md`**
+   has the changes under **Next release** (short bullet points in plain words — this is what teachers read in
+   Settings → Updates). Add to it as you make changes, not on release day.
+2. GitHub → **Actions** → **Release** → **Run workflow** → branch `main`, type the version (e.g. `1.5.4`),
+   leave **Publish right away** ticked → **Run workflow**.
 3. Wait 15–25 minutes. The workflow:
    - refuses a version that already exists or is not higher than the last release;
    - runs all CI checks;
    - on Windows: sets the version (`set-version.ps1`), builds the desktop app (`wails build`), the engine
      (`pyinstaller`), **starts the engine once** (`build/smoke-test-engine.ps1`) and builds the installer
      (Inno Setup);
-   - commits "Release 1.5.4", tags `v1.5.4`, and creates a **draft** release with `PresentiaSetup.exe` and its
-     SHA-256 checksum, listing the commits since the last release.
-4. Open **Releases** → the draft. Optionally download and try the installer. Rewrite the "What's new" part in
-   plain words, then press **Publish release**. Only now do installed copies see the update.
+   - builds the release text with `build/release_notes.py`: "What's new" from `RELEASE_NOTES.md`, then the
+     commits since the last release and the download note;
+   - commits "Release 1.5.4" (with the notes moved under a "## 1.5.4 — date" heading and an empty "Next
+     release" left for the next changes), tags `v1.5.4`, and creates the release with `PresentiaSetup.exe`
+     and its SHA-256 checksum.
+4. With notes written and **Publish right away** ticked, the release is **published**: installed copies
+   offer it within a few hours. If "Next release" was empty, or you unticked the box, it stays a **draft**:
+   open **Releases** → the draft, write "What's new", press **Publish release**.
 
 If a step fails, nothing is published: open the failed run, look at the red step's log, fix, and run the
 Release again (a tag is only created after everything built). If the version commit could not be pushed to

@@ -5,11 +5,14 @@
 # 3. On Windows: sets the version, builds the desktop app (Wails), the frozen
 #    engine (PyInstaller), starts the engine once to make sure it runs, and
 #    builds the installer (Inno Setup).
-# 4. Commits the version change, tags it, and creates a DRAFT GitHub release
-#    with PresentiaSetup.exe and its SHA-256 checksum.
+# 4. Takes "What's new" from RELEASE_NOTES.md (the "Next release" section),
+#    commits the version change with those notes filed under the version,
+#    tags it, and creates the GitHub release with PresentiaSetup.exe and its
+#    SHA-256 checksum.
 #
-# Nothing reaches users until you open the draft and press Publish: installed
-# copies only see published releases.
+# With "Publish right away" ticked (the default) and notes written, the
+# release goes straight to installed copies. With nothing under "Next
+# release", or the box unticked, it stays a DRAFT: open it, edit, Publish.
 name: Release
 
 on:
@@ -19,6 +22,11 @@ on:
         description: "Version to release, e.g. 1.5.4 (no v)"
         required: true
         type: string
+      publish:
+        description: "Publish right away (uses the notes in RELEASE_NOTES.md; unticked = draft)"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -150,11 +158,30 @@ jobs:
           path: build/output/
           retention-days: 14
 
+      - name: Release notes
+        id: notes
+        run: |
+          $hash = (Get-Content build\output\PresentiaSetup.exe.sha256).Split(' ')[0]
+          python build\release_notes.py body $env:VERSION "$env:PREVIOUS" $hash
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
+            "written=true" >> $env:GITHUB_OUTPUT
+            # File this version's notes under its own heading for next time.
+            python build\release_notes.py rotate $env:VERSION (Get-Date -Format 'yyyy-MM-dd')
+            if ($LASTEXITCODE) { throw "Could not update RELEASE_NOTES.md" }
+          } elseif ($code -eq 3) {
+            "written=false" >> $env:GITHUB_OUTPUT
+            "::warning::Nothing under 'Next release' in RELEASE_NOTES.md - the release stays a draft for you to fill in."
+            $global:LASTEXITCODE = 0
+          } else {
+            throw "Could not build the release notes ($code)"
+          }
+
       - name: Commit the version and tag it
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add presentia-desktop/update.go build/installer.iss presentia-desktop/wails.json
+          git add presentia-desktop/update.go build/installer.iss presentia-desktop/wails.json RELEASE_NOTES.md
           git commit -m "Release $env:VERSION"
           git tag -a "v$env:VERSION" -m "Presentia $env:VERSION"
           git push origin "v$env:VERSION"
@@ -168,33 +195,20 @@ jobs:
             $global:LASTEXITCODE = 0
           }
 
-      - name: Draft the release
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLISH: ${{ inputs.publish && steps.notes.outputs.written == 'true' }}
         run: |
-          $range = if ($env:PREVIOUS) { "v$env:PREVIOUS..HEAD" } else { "HEAD" }
-          $changes = git log $range --no-merges --pretty="format:- %s" |
-            Where-Object { $_ -notmatch '^- Release ' }
-          $hash = (Get-Content build\output\PresentiaSetup.exe.sha256).Split(' ')[0]
-          $notes = @(
-            "## What's new"
-            ""
-            "_Edit this before publishing: say in plain words what changed for teachers._"
-            ""
-            "## Changes since v$($env:PREVIOUS)"
-            ""
-            $changes
-            ""
-            "## Download"
-            ""
-            "Download **PresentiaSetup.exe** below and run it. Installed copies offer this update in Settings → Updates once it is published."
-            ""
-            "SHA-256: ``$hash``"
-          ) -join "`n"
-          $notes | Out-File -Encoding utf8 release-notes.md
-          gh release create "v$env:VERSION" --draft --title "Presentia $env:VERSION" `
+          $draft = if ($env:PUBLISH -eq 'true') { @() } else { @('--draft') }
+          gh release create "v$env:VERSION" @draft --title "Presentia $env:VERSION" `
             --notes-file release-notes.md `
             build\output\PresentiaSetup.exe build\output\PresentiaSetup.exe.sha256
-          if ($LASTEXITCODE) { throw "Could not create the draft release" }
-          "Draft release created: https://github.com/${{ github.repository }}/releases (open it, edit the notes, press Publish)" |
-            Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE) { throw "Could not create the release" }
+          $where = "https://github.com/${{ github.repository }}/releases"
+          $summary = if ($env:PUBLISH -eq 'true') {
+            "Published Presentia $($env:VERSION) - $where (installed copies offer it within a few hours)"
+          } else {
+            "Draft release created - $where (open it, check the notes, press Publish)"
+          }
+          $summary | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
