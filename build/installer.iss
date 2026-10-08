@@ -18,7 +18,7 @@
 ; presentia-desktop\update.go and the git tag of the GitHub Release, or the
 ; in-app update banner will never clear. Use:
 ;     powershell -ExecutionPolicy Bypass -File build\set-version.ps1 1.1.0
-#define MyAppVersion "1.6.1"
+#define MyAppVersion "1.6.2"
 #define MyAppPublisher "Presentia Team"
 #define MyAppExeName "Presentia.exe"
 
