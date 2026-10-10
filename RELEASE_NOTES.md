@@ -11,6 +11,8 @@ version and starts a new empty "Next release" section.
 
 <!-- Write what changed for teachers here, as short bullet points. -->
 
+## 1.7.0 — 2026-10-10
+
 - **Server mode (new, Settings → Server mode).** Turn this computer into a Presentia server: you create teacher accounts and choose which classes each teacher may monitor. Teachers sign in from their own browser, share their meeting tab and watch their roster live, while the face checks run on this computer. Put it on the internet with Cloudflare Tunnel (`cloudflared tunnel --url http://localhost:7790`); up to 3 classes at once.
 - **Safer engine.** Presentia's engine now refuses requests from websites other than Presentia itself, so a web page open in your browser can't reach your class data.
 
