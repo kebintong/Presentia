@@ -2341,6 +2341,23 @@ select.input option {
   padding: 10px 12px; border-radius: var(--radius-sm); font-size: 12.5px;
   background: var(--warn-dim); color: var(--ink);
 }
+/* Settings → Server mode */
+.server-box { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--card-row-bg);
+  border: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 6px; }
+.server-line { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.server-ok { background: var(--present) !important; }
+.server-cmd { display: flex; gap: 8px; align-items: center; }
+.server-cmd code { flex: 1; padding: 8px 10px; border-radius: 8px; background: var(--input-bg, var(--card-row-bg));
+  border: 1px solid var(--border-subtle); font-size: 12.5px; overflow-x: auto; white-space: nowrap; }
+.teacher-list { display: flex; flex-direction: column; gap: 6px; }
+.teacher-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px;
+  border-radius: var(--radius-sm); background: var(--card-row-bg); border: 1px solid var(--border-subtle); }
+.teacher-row.off { opacity: .65; }
+.teacher-user { font-weight: 500; color: var(--muted); font-size: 12px; }
+.teacher-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.teacher-actions button { padding: 5px 10px; font-size: 12px; }
+.teacher-classes { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; }
+.teacher-class { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .win-chip { font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 6px;
   background: var(--card-row-bg); border: 1px solid var(--border-subtle); color: var(--muted); flex-shrink: 0; }
 

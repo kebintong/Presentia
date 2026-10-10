@@ -20,6 +20,7 @@ import traceback
 
 import cv2
 import numpy as np
+from dataclasses import dataclass
 from fastapi import (
     FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect,
     Body,
@@ -45,6 +46,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Only Presentia's own window may use the engine from a browser. The engine
+# has no sign-in (it only listens on this computer), so a web page open in
+# the instructor's browser must not be able to call it: requests that carry
+# an Origin from anywhere else are refused. (Programs that send no Origin —
+# the desktop shell itself — are not affected.)
+_APP_ORIGINS = {
+    "http://wails.localhost", "https://wails.localhost", "wails://wails",   # the desktop app
+    "http://localhost:34115", "http://localhost:5173", "http://127.0.0.1:5173",  # development
+    "http://localhost:4173", "http://127.0.0.1:4173",
+    "http://127.0.0.1:7788", "http://localhost:7788",                        # the engine's own pages
+} | {o.strip() for o in os.environ.get("PRESENTIA_ALLOW_ORIGINS", "").split(",") if o.strip()}
+
+
+def _origin_ok(origin: str | None) -> bool:
+    return not origin or origin in _APP_ORIGINS
+
+
+@app.middleware("http")
+async def _only_presentia(request, call_next):
+    if not _origin_ok(request.headers.get("origin")):
+        diag.log(f"Refused {request.method} {request.url.path} from {request.headers.get('origin')!r}", "warning")
+        return Response(status_code=403, content="Presentia's engine only answers Presentia.")
+    return await call_next(request)
+
 
 # Polled several times a second; only logged when they fail.
 _QUIET_PATHS = ("/api/engine/status", "/api/monitor/", "/api/diagnostics", "/api/screen/screenshot")
@@ -1393,6 +1419,115 @@ async def ws_tabfeed(websocket: WebSocket) -> None:
         _TAB_FEED.disconnect(cid)
 
 
+# ── Server mode (app/gateway.py): teachers sign in from their own browser ─────
+
+class ServerModeUpdate(BaseModel):
+    enabled: bool
+
+
+class TeacherCreate(BaseModel):
+    username: str
+    name: str
+    password: str
+    class_ids: list[int] = []
+
+
+class TeacherUpdate(BaseModel):
+    name: str | None = None
+    password: str | None = None
+    class_ids: list[int] | None = None
+    disabled: bool | None = None
+
+
+def _server_mode_payload() -> dict:
+    from app.gateway import SERVER
+
+    return {**SERVER.status(), "enabled": bool(perf.get_settings().get("server_mode", False)),
+            "teachers": db.list_teachers()}
+
+
+def _check_classes(class_ids: list[int]) -> list[int]:
+    out = []
+    for cid in dict.fromkeys(class_ids):
+        if db.get_class(int(cid)) is None:
+            raise HTTPException(status_code=400, detail=f"Class {cid} does not exist.")
+        out.append(int(cid))
+    return out
+
+
+@app.get("/api/server-mode")
+async def get_server_mode() -> dict:
+    return await asyncio.to_thread(_server_mode_payload)
+
+
+@app.put("/api/server-mode")
+async def put_server_mode(body: ServerModeUpdate) -> dict:
+    from app.gateway import SERVER
+
+    perf.save_settings(server_mode=body.enabled)
+    await asyncio.to_thread(SERVER.start if body.enabled else SERVER.stop)
+    return await asyncio.to_thread(_server_mode_payload)
+
+
+@app.post("/api/teachers", status_code=201)
+async def create_teacher(body: TeacherCreate) -> dict:
+    import sqlite3
+
+    from app.core.passwords import hash_password, password_problem
+
+    username = body.username.strip().lower()
+    name = body.name.strip()
+    if not (3 <= len(username) <= 32) or not set(username) <= db.USERNAME_CHARS:
+        raise HTTPException(status_code=400, detail="Usernames are 3–32 characters: letters, numbers, . _ -")
+    if not name:
+        raise HTTPException(status_code=400, detail="Enter the teacher's name.")
+    problem = password_problem(body.password)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    classes = _check_classes(body.class_ids)
+    pw_hash = await asyncio.to_thread(hash_password, body.password)
+    try:
+        tid = db.create_teacher(username, name, pw_hash, classes)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail=f"The username {username!r} is taken.") from exc
+    return db.get_teacher(tid)
+
+
+@app.patch("/api/teachers/{teacher_id}")
+async def update_teacher(teacher_id: int, body: TeacherUpdate) -> dict:
+    from app.core.passwords import hash_password, password_problem
+
+    if db.get_teacher(teacher_id) is None:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    pw_hash = None
+    if body.password is not None:
+        problem = password_problem(body.password)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        pw_hash = await asyncio.to_thread(hash_password, body.password)
+    name = body.name.strip() if body.name is not None else None
+    if name == "":
+        raise HTTPException(status_code=400, detail="Enter the teacher's name.")
+    classes = _check_classes(body.class_ids) if body.class_ids is not None else None
+    db.update_teacher(teacher_id, name=name, pw_hash=pw_hash, disabled=body.disabled, class_ids=classes)
+    return db.get_teacher(teacher_id)
+
+
+@app.delete("/api/teachers/{teacher_id}", status_code=204)
+async def delete_teacher(teacher_id: int) -> None:
+    db.delete_teacher(teacher_id)
+
+
+def _autostart_gateway() -> None:
+    from app.gateway import SERVER
+
+    SERVER.start()
+
+
+if os.environ.get("PRESENTIA_SKIP_ENGINE") != "1" and perf.get_settings().get("server_mode"):
+    threading.Thread(target=_autostart_gateway, daemon=True).start()
+
+
 # ── Following a selected window ───────────────────────────────────────────────
 
 # Presentia's own windows, painted out of screen-area grabs (see self_mask.py).
@@ -1844,6 +1979,9 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
       {"type": "presence_alert", "event_type": str, "message": str}
       {"type": "error",   "message": str}
     """
+    if not _origin_ok(websocket.headers.get("origin")):
+        await websocket.close(code=4403)
+        return
     await websocket.accept()
 
     from app.core.camera import frame_brightness
@@ -2184,9 +2322,41 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
 
 # ── WebSocket: /ws/screen  (Meet Monitor page) ────────────────────────────────
 
+class _NullLive:
+    """Stands in for _live for monitoring run from server mode: a remote
+    teacher's class must not show up in the bubble on this computer."""
+
+    def __getattr__(self, name):
+        return lambda *a, **k: None
+
+
+@dataclass
+class RemoteMonitor:
+    """A monitoring run started by a teacher through server mode (app/gateway.py).
+
+    feed: that teacher's own shared tab — the only thing they can watch.
+    classes: the classes they may monitor.
+    """
+    feed: object
+    classes: set
+    teacher: str = ""
+    preview_fps: float = 2.0      # Live View over the internet: fewer, smaller pictures
+    preview_max_w: int = 960
+
+
 @app.websocket("/ws/screen")
-async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
+async def ws_screen(websocket: WebSocket) -> None:
+    if not _origin_ok(websocket.headers.get("origin")):
+        await websocket.close(code=4403)
+        return
+    await run_monitor(websocket)
+
+
+async def run_monitor(websocket: WebSocket, remote: RemoteMonitor | None = None) -> None:  # noqa: C901
     """Stream screen-region capture with face recognition.
+
+    `remote`: the run belongs to a teacher using server mode; they can only
+    watch their own shared tab and only their own classes.
 
     Client sends:
       {"action": "start", "region": {left,top,width,height}, "class_id": int,
@@ -2207,6 +2377,8 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
       {"type": "error",  "message": str}
     """
     await websocket.accept()
+    live = _live if remote is None else _NullLive()  # the bubble and Live View on this computer
+    tab_feed = _TAB_FEED if remote is None else remote.feed
 
     from app.core.face_engine import FaceEngine
     from app.core.face_gallery import FaceGallery
@@ -2246,7 +2418,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
 
     def _push(payload: dict) -> None:
         if payload.get("type") == "alert":
-            _live.alert(payload.get("message", ""), payload.get("level", "info"))
+            live.alert(payload.get("message", ""), payload.get("level", "info"))
         loop.call_soon_threadsafe(
             lambda p=payload: result_queue.put_nowait(p)
             if not result_queue.full() else None
@@ -2283,8 +2455,8 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
     # free. Meeting tiles barely move, so boxes that are a few frames old
     # still sit on the right faces.
     prof = perf.profile_params()  # fixed for this monitoring session
-    PREVIEW_FPS = prof["preview_fps"]
-    PREVIEW_MAX_W = prof["preview_max_w"]
+    PREVIEW_FPS = prof["preview_fps"] if remote is None else min(prof["preview_fps"], remote.preview_fps)
+    PREVIEW_MAX_W = prof["preview_max_w"] if remote is None else min(prof["preview_max_w"], remote.preview_max_w)
     ANALYSIS_PUSH_EVERY = 0.25  # roster/unknowns updates, unless something changed
     CROP_REFRESH = 2.0          # re-encode an unknown face's thumbnail at most this often
 
@@ -2315,8 +2487,8 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
         state, last_seq, last_put = "", -1, 0.0
         while not stop.is_set() and not cap_stop.is_set() and not stop_event.is_set():
             start = time.monotonic()
-            now_state, frame, seq = _TAB_FEED.latest()
-            title = _TAB_FEED.status().get("label") or region.get("title") or "The meeting tab"
+            now_state, frame, seq = tab_feed.latest()
+            title = tab_feed.status().get("label") or region.get("title") or "The meeting tab"
             if now_state != state:
                 msg = _tab_message(now_state, state or "waiting", title)
                 diag.log(f"Tab sharing: {state or '-'} -> {now_state}")
@@ -2362,7 +2534,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
         ok, buf = cv2.imencode(".jpg", view, [cv2.IMWRITE_JPEG_QUALITY, prof["jpeg_q"]])
         if ok:
             raw = buf.tobytes()
-            _live.frame(raw)
+            live.frame(raw)
             frames.publish(raw)
 
     def _preview_thread(region: dict, stop: threading.Event, cap_stop: threading.Event) -> None:
@@ -2580,8 +2752,8 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                     }
                     ulist.append(entry)
                     unknown_registry[uid] = entry
-                live = {u["uid"] for u in ulist}
-                for uid in [u for u in crop_cache if u not in live]:
+                live_uids = {u["uid"] for u in ulist}
+                for uid in [u for u in crop_cache if u not in live_uids]:
                     crop_cache.pop(uid, None)
                 while len(unknown_registry) > 64:
                     unknown_registry.pop(next(iter(unknown_registry)))
@@ -2611,9 +2783,9 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                 for r in roster:
                     r["suspect"] = r["id"] in suspects
                     r["checking"] = r["id"] == checking
-                _live.stats(roster, len(ulist))
+                live.stats(roster, len(ulist))
                 sig = (tuple((r["id"], r["state"], r["suspect"], r["checking"]) for r in roster),
-                       tuple(sorted(live)))
+                       tuple(sorted(live_uids)))
                 if sig != last_sig or now - last_push >= ANALYSIS_PUSH_EVERY:
                     last_sig, last_push = sig, now
                     _push({
@@ -2710,6 +2882,15 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                     # send no class_id and get every student, as before.
                     raw_cid = msg.get("class_id")
                     cid = int(raw_cid) if raw_cid is not None else None
+                    if remote is not None:
+                        # A remote teacher watches only their shared tab, and
+                        # only a class they were given.
+                        if cid is None or cid not in remote.classes:
+                            await _say({"type": "error", "message": "You can't monitor that class."})
+                            continue
+                        region = {"tab": True, "title": "Your meeting tab"}
+                        if not session_name:
+                            session_name = f"Meet ({remote.teacher})" if remote.teacher else "Meet"
                     if cid is not None and db.get_class(cid) is None:
                         await _say({"type": "error", "message": "That class no longer exists."})
                         continue
@@ -2756,14 +2937,14 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                                      daemon=True).start()
                     threading.Thread(target=_challenge_thread, args=(run_stop,),
                                      daemon=True).start()
-                    _live.start(session_name or "Meet session")
-                    _live.stats(rm.status(), 0)
+                    live.start(session_name or "Meet session")
+                    live.stats(rm.status(), 0)
                     await _say({"type": "started", "session_id": sid})
 
                 elif action == "stop":
                     run_stop.set()
                     _cancel_challenge()
-                    _live.stop()
+                    live.stop()
                     s_id = session_id
                     if s_id is not None:
                         db.end_session(s_id)
@@ -2784,6 +2965,8 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                     if not active:
                         await _say({"type": "error", "message": "Monitoring is not running."})
                         continue
+                    if remote is not None:
+                        msg["region"] = {"tab": True}
                     cap_stop.set()
                     cap_stop = threading.Event()
                     overlay = []
@@ -2854,7 +3037,7 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
                     await _say({"type": "alert", "level": "ok",
                                 "message": f"Face added to {name} — they will be recognised from now on."})
 
-                elif action == "restore_window":
+                elif action == "restore_window" and remote is None:
                     # A minimised meeting window has no picture at all: put
                     # it back behind the other windows, without focusing it.
                     with follower_lock:
@@ -2989,4 +3172,4 @@ async def ws_screen(websocket: WebSocket) -> None:  # noqa: C901
         )
     finally:
         stop_event.set()
-        _live.stop()
+        live.stop()

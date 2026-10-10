@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS events (
 # an auto-update can bring any older database forward without losing data.
 
 # Bump this together with a new entry in _MIGRATIONS.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Name of the class that existing students and sessions are moved into when a
 # database from before classes existed (v1.4.0 and older) is upgraded.
@@ -242,10 +242,38 @@ def _migrate_to_v3(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_student ON student_faces(student_id)")
 
 
+def _migrate_to_v4(conn: sqlite3.Connection) -> None:
+    """Server mode: teacher accounts that sign in from their own browser,
+    and which classes each of them may monitor."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS teachers (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            username    TEXT NOT NULL UNIQUE,
+            name        TEXT NOT NULL,
+            pw_hash     TEXT NOT NULL,
+            disabled    INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL,
+            last_login  TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS teacher_classes (
+            teacher_id  INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+            class_id    INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+            PRIMARY KEY (teacher_id, class_id)
+        )
+        """
+    )
+
+
 _MIGRATIONS = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
     3: _migrate_to_v3,
+    4: _migrate_to_v4,
 }
 
 
@@ -1080,3 +1108,79 @@ def get_pending(pending_id: int) -> dict | None:
 def delete_pending(pending_id: int) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM pending_students WHERE id = ?", (pending_id,))
+
+
+# ---------------------------------------------------------------- teachers
+#
+# Server mode (app/gateway.py): teachers sign in from their own browser and
+# monitor the classes they were given. Accounts are made on this computer
+# (Settings → Server mode); passwords are stored as scrypt hashes only.
+
+USERNAME_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+
+
+def _teacher_row(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    classes = [r[0] for r in conn.execute(
+        "SELECT class_id FROM teacher_classes WHERE teacher_id = ? ORDER BY class_id", (row["id"],))]
+    return {"id": row["id"], "username": row["username"], "name": row["name"],
+            "disabled": bool(row["disabled"]), "created_at": row["created_at"],
+            "last_login": row["last_login"], "class_ids": classes}
+
+
+def create_teacher(username: str, name: str, pw_hash: str, class_ids: list[int] | None = None) -> int:
+    """Raises sqlite3.IntegrityError if the username is taken."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO teachers (username, name, pw_hash, created_at) VALUES (?, ?, ?, ?)",
+            (username, name, pw_hash, _now()))
+        tid = cur.lastrowid
+        for cid in class_ids or []:
+            conn.execute("INSERT OR IGNORE INTO teacher_classes (teacher_id, class_id) VALUES (?, ?)", (tid, cid))
+        return tid
+
+
+def list_teachers() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM teachers ORDER BY name COLLATE NOCASE").fetchall()
+        return [_teacher_row(conn, r) for r in rows]
+
+
+def get_teacher(teacher_id: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM teachers WHERE id = ?", (teacher_id,)).fetchone()
+        return _teacher_row(conn, row) if row else None
+
+
+def teacher_login_row(username: str) -> dict | None:
+    """The account with its password hash, for signing in."""
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM teachers WHERE username = ?", (username,)).fetchone()
+        if row is None:
+            return None
+        return {**_teacher_row(conn, row), "pw_hash": row["pw_hash"]}
+
+
+def update_teacher(teacher_id: int, name: str | None = None, pw_hash: str | None = None,
+                   disabled: bool | None = None, class_ids: list[int] | None = None) -> None:
+    with _connect() as conn:
+        if name is not None:
+            conn.execute("UPDATE teachers SET name = ? WHERE id = ?", (name, teacher_id))
+        if pw_hash is not None:
+            conn.execute("UPDATE teachers SET pw_hash = ? WHERE id = ?", (pw_hash, teacher_id))
+        if disabled is not None:
+            conn.execute("UPDATE teachers SET disabled = ? WHERE id = ?", (int(disabled), teacher_id))
+        if class_ids is not None:
+            conn.execute("DELETE FROM teacher_classes WHERE teacher_id = ?", (teacher_id,))
+            for cid in class_ids:
+                conn.execute("INSERT OR IGNORE INTO teacher_classes (teacher_id, class_id) VALUES (?, ?)",
+                             (teacher_id, cid))
+
+
+def touch_teacher_login(teacher_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE teachers SET last_login = ? WHERE id = ?", (_now(), teacher_id))
+
+
+def delete_teacher(teacher_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM teachers WHERE id = ?", (teacher_id,))

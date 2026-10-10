@@ -3,6 +3,8 @@ stand-in face engine): capture states, roster updates, switching source."""
 
 from __future__ import annotations
 
+import concurrent.futures
+import contextlib
 import json
 import time
 
@@ -46,6 +48,11 @@ def push_frame(feed):
     return cid
 
 
+# (contextlib.suppress around the sockets: the test client cancels the server
+# task when a block ends; if the engine is still finishing it reports that as
+# CancelledError — a test-client race, not an app error.)
+
+
 def read_until(ws, pred, limit=3000):
     for _ in range(limit):
         msg = ws.receive()
@@ -58,7 +65,7 @@ def read_until(ws, pred, limit=3000):
 
 def test_monitoring_a_shared_tab(setup):
     c, feed, cid = setup
-    with c.websocket_connect("/ws/screen") as ws:
+    with contextlib.suppress(concurrent.futures.CancelledError), c.websocket_connect("/ws/screen") as ws:
         ws.send_text(json.dumps({"action": "start", "region": {"tab": True, "title": "Browser tab"},
                                  "class_id": cid, "name": "Test"}))
         read_until(ws, lambda d: d.get("type") == "started")
@@ -112,7 +119,7 @@ def test_this_is_assigns_an_unknown_face(setup, monkeypatch):
             return face
 
     monkeypatch.setattr(FaceEngine, "instance", classmethod(lambda cls: OneFace()))
-    with c.websocket_connect("/ws/screen") as ws:
+    with contextlib.suppress(concurrent.futures.CancelledError), c.websocket_connect("/ws/screen") as ws:
         ws.send_text(json.dumps({"action": "start", "region": {"tab": True}, "class_id": cid, "name": "T"}))
         read_until(ws, lambda d: d.get("type") == "started")
         push_frame(feed)

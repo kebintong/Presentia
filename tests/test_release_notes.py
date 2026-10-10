@@ -59,6 +59,9 @@ def test_teacher_notes_in_the_app_read_the_published_body():
     assert "Half-visible faces" in teacher and "Edit this" not in teacher
 
 
-def test_real_file_has_notes_for_the_next_release():
+def test_real_file_is_well_formed():
+    """Right after a release "Next release" is empty; otherwise it holds bullet points."""
     text = (Path(__file__).resolve().parents[1] / "RELEASE_NOTES.md").read_text(encoding="utf-8")
-    assert rn.next_notes(text).startswith("- ")
+    notes = rn.next_notes(text)
+    assert notes == "" or notes.startswith("- ")
+    assert "## Next release" in text

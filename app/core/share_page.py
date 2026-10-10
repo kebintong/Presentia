@@ -12,7 +12,72 @@ from __future__ import annotations
 CSP = ("default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:; "
        "connect-src ws://127.0.0.1:7788 ws://localhost:7788; style-src 'unsafe-inline'; img-src data:")
 
-PAGE = r"""<!doctype html>
+WORKER_SRC = r"""    let ws = null, url = '', hello = null, open = false, stopped = false
+    let fps = 3, maxW = 1920, q = 0.8, last = 0, busy = false, sent = 0, canvas = null, ctx = null
+    function connect() {
+      ws = new WebSocket(url)
+      ws.binaryType = 'arraybuffer'
+      ws.onopen = () => { open = true; ws.send(JSON.stringify(hello)); postMessage({ type: 'ws', open: true }) }
+      ws.onclose = (e) => {
+        open = false
+        postMessage({ type: 'ws', open: false, code: e.code })
+        if (!stopped && e.code !== 4401) setTimeout(connect, 2000)
+      }
+      ws.onmessage = (e) => {
+        try {
+          const m = JSON.parse(e.data)
+          if (m.type === 'stop') { stopped = true; postMessage({ type: 'stop' }) }
+          if (m.type === 'rate' && m.fps) fps = m.fps
+        } catch (err) { /* not for us */ }
+      }
+    }
+    async function pump(readable) {
+      const reader = readable.getReader()
+      for (;;) {
+        const { value: frame, done } = await reader.read()
+        if (done) break
+        const now = performance.now()
+        if (!open || busy || stopped || now - last < 1000 / fps) { frame.close(); continue }
+        last = now
+        busy = true
+        try {
+          const k = Math.min(1, maxW / frame.displayWidth)
+          const w = Math.round(frame.displayWidth * k), h = Math.round(frame.displayHeight * k)
+          if (!canvas || canvas.width !== w || canvas.height !== h) {
+            canvas = new OffscreenCanvas(w, h)
+            ctx = canvas.getContext('2d')
+          }
+          ctx.drawImage(frame, 0, 0, w, h)
+          frame.close()
+          const buf = await (await canvas.convertToBlob({ type: 'image/jpeg', quality: q })).arrayBuffer()
+          if (open && ws.bufferedAmount < 4e6) {
+            ws.send(buf)
+            sent++
+            if (sent === 1 || sent % 30 === 0) postMessage({ type: 'sent', n: sent, w, h })
+          }
+        } catch (err) {
+          try { frame.close() } catch (e) {}
+          postMessage({ type: 'error', message: String(err) })
+        }
+        busy = false
+      }
+      postMessage({ type: 'done' })
+    }
+    onmessage = (e) => {
+      const m = e.data
+      if (m.type === 'start') {
+        url = m.url; hello = m.hello; fps = m.fps; maxW = m.maxW; q = m.quality
+        connect()
+        pump(m.readable)
+      } else if (m.type === 'ended') {
+        stopped = true
+        if (open) ws.send(JSON.stringify({ type: 'ended' }))
+        setTimeout(() => { try { ws.close() } catch (err) {} }, 200)
+      }
+    }
+"""
+
+_PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -88,70 +153,7 @@ PAGE = r"""<!doctype html>
 
   // Reads the shared tab and sends pictures. A Worker is not slowed down
   // when this page is in the background.
-  const workerSrc = `
-    let ws = null, url = '', hello = null, open = false, stopped = false
-    let fps = 3, maxW = 1920, q = 0.8, last = 0, busy = false, sent = 0, canvas = null, ctx = null
-    function connect() {
-      ws = new WebSocket(url)
-      ws.binaryType = 'arraybuffer'
-      ws.onopen = () => { open = true; ws.send(JSON.stringify(hello)); postMessage({ type: 'ws', open: true }) }
-      ws.onclose = (e) => {
-        open = false
-        postMessage({ type: 'ws', open: false, code: e.code })
-        if (!stopped && e.code !== 4401) setTimeout(connect, 2000)
-      }
-      ws.onmessage = (e) => {
-        try {
-          const m = JSON.parse(e.data)
-          if (m.type === 'stop') { stopped = true; postMessage({ type: 'stop' }) }
-          if (m.type === 'rate' && m.fps) fps = m.fps
-        } catch (err) { /* not for us */ }
-      }
-    }
-    async function pump(readable) {
-      const reader = readable.getReader()
-      for (;;) {
-        const { value: frame, done } = await reader.read()
-        if (done) break
-        const now = performance.now()
-        if (!open || busy || stopped || now - last < 1000 / fps) { frame.close(); continue }
-        last = now
-        busy = true
-        try {
-          const k = Math.min(1, maxW / frame.displayWidth)
-          const w = Math.round(frame.displayWidth * k), h = Math.round(frame.displayHeight * k)
-          if (!canvas || canvas.width !== w || canvas.height !== h) {
-            canvas = new OffscreenCanvas(w, h)
-            ctx = canvas.getContext('2d')
-          }
-          ctx.drawImage(frame, 0, 0, w, h)
-          frame.close()
-          const buf = await (await canvas.convertToBlob({ type: 'image/jpeg', quality: q })).arrayBuffer()
-          if (open && ws.bufferedAmount < 4e6) {
-            ws.send(buf)
-            sent++
-            if (sent === 1 || sent % 30 === 0) postMessage({ type: 'sent', n: sent, w, h })
-          }
-        } catch (err) {
-          try { frame.close() } catch (e) {}
-          postMessage({ type: 'error', message: String(err) })
-        }
-        busy = false
-      }
-      postMessage({ type: 'done' })
-    }
-    onmessage = (e) => {
-      const m = e.data
-      if (m.type === 'start') {
-        url = m.url; hello = m.hello; fps = m.fps; maxW = m.maxW; q = m.quality
-        connect()
-        pump(m.readable)
-      } else if (m.type === 'ended') {
-        stopped = true
-        if (open) ws.send(JSON.stringify({ type: 'ended' }))
-        setTimeout(() => { try { ws.close() } catch (err) {} }, 200)
-      }
-    }`
+  const workerSrc = __WORKER_SRC__
 
   function stopAll(sayEnded) {
     if (worker) { if (sayEnded) worker.postMessage({ type: 'ended' }); setTimeout(((w) => () => w.terminate())(worker), 500); worker = null }
@@ -264,3 +266,9 @@ PAGE = r"""<!doctype html>
 </body>
 </html>
 """
+
+
+import json as _json  # noqa: E402
+
+# The page with the Worker's source filled in (shared with teacher_page.py).
+PAGE = _PAGE.replace("__WORKER_SRC__", _json.dumps(WORKER_SRC))
