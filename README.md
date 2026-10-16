@@ -182,31 +182,7 @@ cosine similarity of **0.45** or more.
 | Windows | WebView2 runtime (built into Windows 11) |
 | Linux | `gcc`, `pkg-config`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev` |
 
-### Setup
 
-```bash
-git clone https://github.com/kebintong/Presentia.git
-cd Presentia
-
-python -m venv .venv
-# Windows PowerShell (if scripts are blocked: Set-ExecutionPolicy -Scope Process Bypass)
-.venv\Scripts\Activate.ps1
-# Linux
-source .venv/bin/activate
-
-pip install -r requirements.txt
-
-cd presentia-desktop/frontend
-npm install
-cd ../..
-```
-
-### Run
-
-```bash
-cd presentia-desktop
-wails dev
-```
 
 Wails starts the Vite dev server with hot reload, and the Go shell starts the Python engine on
 `http://127.0.0.1:7788` from `.venv`. Like the installed app, it keeps its data in `%APPDATA%\Presentia`
