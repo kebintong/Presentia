@@ -9,9 +9,9 @@ on:
     # Dependabot branches are checked through their pull request instead,
     # so they don't run twice.
     branches-ignore: ["dependabot/**"]
-    paths-ignore: ["**.md", "Dev Ins.txt"]
+    paths-ignore: ["**.md"]
   pull_request:
-    paths-ignore: ["**.md", "Dev Ins.txt"]
+    paths-ignore: ["**.md"]
   workflow_dispatch:
     inputs:
       deploy_website:
@@ -150,9 +150,35 @@ jobs:
           npm run assets
           npx wrangler deploy --dry-run --outdir .wrangler-dry-run
 
+  # The phone app's cloud: the tables and row-level security in supabase/,
+  # on a plain Postgres with a stand-in for Supabase's auth schema.
+  supabase:
+    name: Supabase rules (Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Migration, sync rules and row-level security
+        run: |
+          psql -v ON_ERROR_STOP=1 -q -f supabase/tests/auth_stub.sql
+          for f in supabase/migrations/*.sql; do psql -v ON_ERROR_STOP=1 -q -f "$f"; done
+          psql -v ON_ERROR_STOP=1 -q -f supabase/tests/rls_test.sql
+
   deploy-website:
     name: Deploy the registration website
-    needs: [sidecar, frontend, desktop, website]
+    needs: [sidecar, frontend, desktop, website, supabase]
     # Only from main, only after every check above passed: on a push, or when
     # started by hand with "deploy website" ticked. Never from the Release run.
     if: >-

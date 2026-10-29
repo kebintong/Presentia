@@ -9,6 +9,7 @@ __pycache__/
 # ── Local data ───────────────────────────────────────────────────────
 # Never commit a real class's attendance records or exports.
 attendance.db
+performance.json
 *.csv
 
 # ── Node ─────────────────────────────────────────────────────────────
