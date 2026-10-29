@@ -13,6 +13,7 @@ import csv
 import io
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -32,7 +33,6 @@ from app.data import cloud, db, sync
 from app.core import diag, perf
 from app.core.self_mask import SelfMask, paint, soften
 from app.core.face_engine import FaceEngine, MATCH_THRESHOLD
-from app.core.tab_feed import ORIGINS as TAB_ORIGINS
 
 # ── DB init ──────────────────────────────────────────────────────────────────
 db.init_db()
@@ -42,16 +42,15 @@ app = FastAPI(title="Presentia Sidecar", version="1.0.0")
 # Only Presentia's own pages may use the engine: the desktop window, the dev
 # servers and the pages the engine serves itself (/share). Any other website
 # open in the teacher's browser must not reach the webcam, screen or faces.
-APP_ORIGINS = frozenset({
-    "http://wails.localhost", "wails://wails",            # desktop window (Windows; Linux/macOS)
-    "http://localhost:34115", "http://localhost:5173",    # `wails dev`, `npm run dev`
-    *TAB_ORIGINS,
-})
+# The desktop window is http://wails.localhost (Windows) or wails://wails, with
+# the dev server's port added under `wails dev` (e.g. http://wails.localhost:34115).
+APP_ORIGIN = re.compile(r"(http://wails\.localhost|wails://wails)(:\d+)?"
+                        r"|http://(localhost|127\.0\.0\.1):(5173|7788|34115)")
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=sorted(APP_ORIGINS),
+    allow_origin_regex=APP_ORIGIN.pattern,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -69,7 +68,7 @@ class _LocalOnly:
             headers = dict(scope["headers"])
             origin = headers.get(b"origin", b"").decode("latin-1")
             host = headers.get(b"host", b"").decode("latin-1").rsplit(":", 1)[0]
-            if host not in LOCAL_HOSTS or (origin and origin not in APP_ORIGINS):
+            if host not in LOCAL_HOSTS or (origin and not APP_ORIGIN.fullmatch(origin)):
                 if scope["type"] == "websocket":
                     await send({"type": "websocket.close", "code": 1008})
                 else:

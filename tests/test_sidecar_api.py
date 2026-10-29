@@ -61,11 +61,14 @@ def test_only_presentias_own_pages_may_use_the_engine(client):
     from app import sidecar
 
     # The desktop window, and tools that send no Origin (the Go shell): allowed.
-    assert client.get("/api/classes", headers={"origin": "http://wails.localhost"}).status_code == 200
+    for app_origin in ("http://wails.localhost", "http://wails.localhost:34115", "wails://wails"):
+        res = client.get("/api/classes", headers={"origin": app_origin})
+        assert res.status_code == 200 and res.headers["access-control-allow-origin"] == app_origin
     assert client.get("/api/classes").status_code == 200
     # Another website in the teacher's browser: refused, WebSockets included.
     evil = {"origin": "https://evil.example"}
     assert client.get("/api/classes", headers=evil).status_code == 403
+    assert client.get("/api/classes", headers={"origin": "http://wails.localhost.evil.example"}).status_code == 403
     assert client.post("/api/data/delete-all", json={"confirm": "DELETE"}, headers=evil).status_code == 403
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect("/ws/camera", headers=evil) as ws:
