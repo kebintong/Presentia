@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { SaveCSVToFile } from '../../wailsjs/go/main/App'
 import { ClassInfo } from '../classes'
-
-const API = 'http://127.0.0.1:7788'
+import { API } from '../api'
 
 interface Session {
   id: number

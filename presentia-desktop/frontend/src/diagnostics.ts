@@ -9,8 +9,7 @@
  * - Builds the plain-text report, with the user's name taken out of paths.
  */
 import { ClipboardSetText } from '../wailsjs/runtime/runtime'
-
-export const API = 'http://127.0.0.1:7788'
+import { API } from './api'
 
 export interface Problem {
   id: number

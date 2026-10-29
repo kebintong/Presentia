@@ -5,9 +5,7 @@ import AlertList, { makeAlert } from '../components/AlertList'
 import StatusBanner from '../components/StatusBanner'
 import CameraViewControls, { useCameraView } from '../components/CameraViewControls'
 import { ClassInfo } from '../classes'
-
-const API = 'http://127.0.0.1:7788'
-const WS  = 'ws://127.0.0.1:7788'
+import { API, WS } from '../api'
 
 const LIVENESS_TIMEOUT = 60_000
 const RECOGNIZE_ATTEMPTS = 12

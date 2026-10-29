@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import Modal from '../components/Modal'
 import { ClassInfo, formatJoinCode, shortDate } from '../classes'
-
-const API = 'http://127.0.0.1:7788'
+import { API } from '../api'
 
 interface ClassPickerPageProps {
   /** Enter a class — the rest of the app then works on its roster. */

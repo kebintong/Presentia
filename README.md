@@ -119,6 +119,10 @@ face data, and nobody can be in the same class twice.
 - **Attendance and face data stay on the teacher's computer**, in a local SQLite database
   (`%APPDATA%\Presentia\attendance.db`). A face is stored as a 512-number template, not as a
   photo.
+- **Phone app (optional).** Only if the teacher signs in under Settings → Phone app are classes, students
+  (with their face templates), attendance and waiting registrations copied to their own Presentia account
+  on Supabase, where row-level security lets nobody else read them. Deleting something on the desktop
+  deletes it there too, and wipes the names and face data. See [`supabase/README.md`](supabase/README.md).
 - **The registration website only holds registrations until the app collects them.** Photos are deleted as soon as
   the app downloads them, and anything not collected is deleted after 14 days. No face template is ever computed
   or stored on the website.
@@ -272,6 +276,7 @@ Presentia/
 │   ├── data/
 │   │   ├── db.py                       # SQLite schema + versioned migrations
 │   │   ├── cloud.py                    # Registration website + reports (HTTPS with certificate fallback)
+│   │   ├── sync.py                     # Phone app sync with Supabase (optional sign-in)
 │   │   └── export.py, xlsx.py          # Excel export (no extra dependencies)
 ├── presentia-desktop/                  # Wails desktop app
 │   ├── main.go, app.go                 # Window, engine supervisor, save dialogs
@@ -286,6 +291,7 @@ Presentia/
 │       └── components/                 # TopBar, Sidebar, SettingsPanel and its tabs,
 │                                       # OnlineRegistration, ProblemPrompt, ReportDialog, …
 ├── web/                                # Registration website (Cloudflare Worker + D1)
+├── supabase/                           # Phone app cloud: tables, row-level security, setup
 ├── build/                              # PyInstaller spec, Inno Setup script, set-version.ps1,
 │                                       # smoke-test-engine.ps1, BUILD.md
 ├── tests/                              # pytest suite

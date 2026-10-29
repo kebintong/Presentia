@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Modal from './Modal'
 import { redact } from '../diagnostics'
-
-const API = 'http://127.0.0.1:7788'
+import { API } from '../api'
 
 interface Summary {
   classes: number
@@ -29,6 +28,7 @@ export default function DataSettings() {
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<string | null>(null)
+  const [phoneApp, setPhoneApp] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -36,6 +36,8 @@ export default function DataSettings() {
       if (!res.ok) throw new Error()
       setSummary(await res.json())
       setError('')
+      const account = await fetch(`${API}/api/account`).then((r) => r.json()).catch(() => null)
+      setPhoneApp(!!account?.signed_in)
     } catch {
       setError('The Presentia engine is not answering, so the stored data cannot be shown.')
     }
@@ -123,6 +125,7 @@ export default function DataSettings() {
                   <li><strong>{plural(summary?.sessions ?? 0, 'session')}</strong> and{' '}
                     <strong>{plural(summary?.attendance ?? 0, 'attendance record')}</strong></li>
                   <li>Waiting online registrations, and the diagnostic activity log</li>
+                  {phoneApp && <li>The same data in your Presentia account and phone app</li>}
                 </ul>
               </div>
               <div>

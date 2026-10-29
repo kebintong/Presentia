@@ -19,10 +19,10 @@ import StudentsPage from './pages/StudentsPage'
 import { ClassInfo, classLabel } from './classes'
 import './style.css'
 import './themes.css'
+import { API } from './api'
 
 type Page = 'register' | 'students' | 'meet' | 'session' | 'reports'
 
-const API = 'http://127.0.0.1:7788'
 
 /** Wails bindings, absent when the UI is opened in a plain browser. */
 const goApp = () => (window as any)['go']?.['main']?.['App']

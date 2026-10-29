@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS events (
 # an auto-update can bring any older database forward without losing data.
 
 # Bump this together with a new entry in _MIGRATIONS.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Name of the class that existing students and sessions are moved into when a
 # database from before classes existed (v1.4.0 and older) is upgraded.
@@ -242,10 +242,73 @@ def _migrate_to_v3(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_student ON student_faces(student_id)")
 
 
+# What the phone app sync (app/data/sync.py) shares with Supabase, parents
+# first: table -> (columns, {column: parent table}). Other tables (events,
+# app_settings) stay on this computer.
+SYNC_TABLES: dict[str, tuple[tuple[str, ...], dict[str, str]]] = {
+    "classes": (("name", "section", "join_code", "online", "created_at", "last_opened_at"), {}),
+    "students": (("student_no", "name", "embedding", "created_at"), {}),
+    "student_faces": (("student_id", "embedding", "source", "created_at"), {"student_id": "students"}),
+    "class_students": (("class_id", "student_id", "added_at"),
+                       {"class_id": "classes", "student_id": "students"}),
+    "sessions": (("class_id", "name", "started_at", "ended_at"), {"class_id": "classes"}),
+    "attendance": (("session_id", "student_id", "time_in", "time_out", "status"),
+                   {"session_id": "sessions", "student_id": "students"}),
+    "pending_students": (("class_id", "student_no", "name", "photo_jpeg", "problem", "submitted_at"),
+                         {"class_id": "classes"}),
+}
+
+_SQL_UUID = ("lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2)"
+             " || '-' || substr('89ab', 1 + abs(random()) % 4, 1) || substr(hex(randomblob(2)), 2)"
+             " || '-' || hex(randomblob(6)))")
+_SQL_NOW_UTC = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+
+
+def _migrate_to_v4(conn: sqlite3.Connection) -> None:
+    """Phone app sync. Each shared row gets a UUID (the same on every device),
+    the time it last changed and whether it still has to be uploaded.
+    Triggers keep them up to date, so the code that writes the data does not
+    change; deleted rows are remembered in sync_deleted until uploaded."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sync_deleted "
+        "(tbl TEXT NOT NULL, uid TEXT NOT NULL, deleted_at TEXT NOT NULL, PRIMARY KEY (tbl, uid))"
+    )
+    for table, (columns, _parents) in SYNC_TABLES.items():
+        have = _column_names(conn, table)
+        if "uid" not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN uid TEXT")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN updated_at TEXT")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1")
+        conn.execute(f"UPDATE {table} SET uid = {_SQL_UUID}, updated_at = {_SQL_NOW_UTC} WHERE uid IS NULL")
+        conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_uid ON {table}(uid)")
+        changed = " OR ".join(f"NEW.{c} IS NOT OLD.{c}" for c in columns)
+        # One statement per execute: executescript() would commit the migration halfway.
+        conn.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS sync_insert_{table} AFTER INSERT ON {table}
+            WHEN NEW.uid IS NULL OR NEW.updated_at IS NULL BEGIN
+                UPDATE {table} SET uid = COALESCE(NEW.uid, {_SQL_UUID}),
+                                   updated_at = COALESCE(NEW.updated_at, {_SQL_NOW_UTC})
+                WHERE rowid = NEW.rowid;
+            END""")
+        # A local change; sync itself always changes updated_at or dirty.
+        conn.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS sync_update_{table} AFTER UPDATE ON {table}
+            WHEN NEW.updated_at IS OLD.updated_at AND NEW.dirty IS OLD.dirty AND ({changed}) BEGIN
+                UPDATE {table} SET updated_at = {_SQL_NOW_UTC}, dirty = 1 WHERE rowid = NEW.rowid;
+            END""")
+        conn.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS sync_delete_{table} AFTER DELETE ON {table}
+            WHEN OLD.uid IS NOT NULL BEGIN
+                INSERT OR REPLACE INTO sync_deleted (tbl, uid, deleted_at)
+                VALUES ('{table}', OLD.uid, {_SQL_NOW_UTC});
+            END""")
+
+
 _MIGRATIONS = {
     1: _migrate_to_v1,
     2: _migrate_to_v2,
     3: _migrate_to_v3,
+    4: _migrate_to_v4,
 }
 
 

@@ -11,8 +11,7 @@ import { useSyncExternalStore } from 'react'
 import { makeAlert } from './components/AlertList'
 import { createFrameFeed, type Frame } from './components/frameFeed'
 import { EventsOn } from '../wailsjs/runtime/runtime'
-
-const WS = 'ws://127.0.0.1:7788'
+import { WS } from './api'
 
 export interface AlertItem {
   id: number

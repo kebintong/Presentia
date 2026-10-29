@@ -76,6 +76,7 @@ hiddenimports += [
     "app.sidecar",
     "app.data.db",
     "app.data.cloud",
+    "app.data.sync",
     "app.data.export",
     "app.data.xlsx",
     "app.core.camera",

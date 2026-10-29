@@ -3,8 +3,7 @@ import Modal from '../components/Modal'
 import ReuseStudentsModal from '../components/ReuseStudentsModal'
 import { SaveExcelToFile } from '../../wailsjs/go/main/App'
 import { ClassInfo, formatDateTime, formatDay, formatTime, shortDate } from '../classes'
-
-const API = 'http://127.0.0.1:7788'
+import { API } from '../api'
 
 /** Below this share of sessions attended, a student is flagged. Many
  *  schools drop students who miss more than 20% of classes. */
