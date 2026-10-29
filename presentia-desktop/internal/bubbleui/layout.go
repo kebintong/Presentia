@@ -111,8 +111,7 @@ func Clock(sec float64) string {
 	return fmt.Sprintf("%d:%02d", t/60, t%60)
 }
 
-// CopyMessage is the reminder the instructor pastes into the meeting chat
-// (same wording as app/core/attendance/messages.py).
+// CopyMessage is the reminder the instructor pastes into the meeting chat.
 func CopyMessage(name string, away float64) string {
 	first := "there"
 	if f := strings.Fields(name); len(f) > 0 {

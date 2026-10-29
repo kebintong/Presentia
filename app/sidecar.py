@@ -25,26 +25,60 @@ from fastapi import (
     Body,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from app.data import cloud, db
 from app.core import diag, perf
 from app.core.self_mask import SelfMask, paint, soften
 from app.core.face_engine import FaceEngine, MATCH_THRESHOLD
+from app.core.tab_feed import ORIGINS as TAB_ORIGINS
 
 # ── DB init ──────────────────────────────────────────────────────────────────
 db.init_db()
 
 app = FastAPI(title="Presentia Sidecar", version="1.0.0")
 
+# Only Presentia's own pages may use the engine: the desktop window, the dev
+# servers and the pages the engine serves itself (/share). Any other website
+# open in the teacher's browser must not reach the webcam, screen or faces.
+APP_ORIGINS = frozenset({
+    "http://wails.localhost", "wails://wails",            # desktop window (Windows; Linux/macOS)
+    "http://localhost:34115", "http://localhost:5173",    # `wails dev`, `npm run dev`
+    *TAB_ORIGINS,
+})
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=sorted(APP_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class _LocalOnly:
+    """Refuse other websites (Origin) and DNS rebinding (Host) for HTTP and
+    WebSockets alike; CORS never stops a WebSocket or a request's side effects."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            headers = dict(scope["headers"])
+            origin = headers.get(b"origin", b"").decode("latin-1")
+            host = headers.get(b"host", b"").decode("latin-1").rsplit(":", 1)[0]
+            if host not in LOCAL_HOSTS or (origin and origin not in APP_ORIGINS):
+                if scope["type"] == "websocket":
+                    await send({"type": "websocket.close", "code": 1008})
+                else:
+                    await PlainTextResponse("Forbidden", status_code=403)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_LocalOnly)
 
 # Polled several times a second; only logged when they fail.
 _QUIET_PATHS = ("/api/engine/status", "/api/monitor/", "/api/diagnostics", "/api/screen/screenshot")

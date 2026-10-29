@@ -109,13 +109,13 @@ def test_diagnose_unreachable(fresh_db, monkeypatch):
 
 
 def test_diagnostics_endpoint(fresh_db, monkeypatch):
-    from fastapi.testclient import TestClient
+    from conftest import engine_client
 
     from app import sidecar
 
     monkeypatch.setenv("NO_PROXY", "*")
     monkeypatch.setenv("PRESENTIA_CLOUD_URL", "https://127.0.0.1:9")
-    res = TestClient(sidecar.app).get("/api/diagnostics")
+    res = engine_client().get("/api/diagnostics")
     assert res.status_code == 200
     body = res.json()
     assert {r["label"] for r in body["system"]} >= {"Python", "Data folder", "Face engine", "certifi"}

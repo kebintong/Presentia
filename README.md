@@ -264,7 +264,7 @@ Presentia/
 │   │   ├── stillness.py                # Still-tile (frozen video / photo) warnings
 │   │   ├── roster_monitor.py           # Waiting → present → missing per student
 │   │   ├── monitor.py                  # Single-student presence monitoring
-│   │   ├── screen.py, tile_tracker.py  # Screen / window capture, tile tracking
+│   │   ├── tile_tracker.py             # Tile tracking
 │   │   ├── enrollment.py, camera.py    # Guided 5-pose enrolment, webcam capture
 │   │   ├── perf.py                     # Devices, profiles, benchmark
 │   │   ├── window_capture.py           # Windows Graphics Capture, covered-window checks
@@ -272,8 +272,7 @@ Presentia/
 │   ├── data/
 │   │   ├── db.py                       # SQLite schema + versioned migrations
 │   │   ├── cloud.py                    # Registration website + reports (HTTPS with certificate fallback)
-│   │   ├── export.py, xlsx.py          # Excel export (no extra dependencies)
-│   └── ui/, main.py                    # Legacy PySide6 interface (kept for reference)
+│   │   └── export.py, xlsx.py          # Excel export (no extra dependencies)
 ├── presentia-desktop/                  # Wails desktop app
 │   ├── main.go, app.go                 # Window, engine supervisor, save dialogs
 │   ├── update.go                       # Auto-update from GitHub releases (AppVersion lives here)

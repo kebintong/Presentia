@@ -48,12 +48,10 @@ jobs:
       - name: System libraries
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libgl1 libegl1 libgles2
 
-      # PySide6 is only for the old Qt UI, which the sidecar does not use.
       - name: Install dependencies
         run: |
-          grep -v -i '^pyside6' requirements.txt > ci-requirements.txt
           python -m pip install --upgrade pip
-          pip install -r ci-requirements.txt pytest httpx openpyxl
+          pip install -r requirements.txt pytest httpx openpyxl
 
       - name: Syntax check
         run: python -m compileall -q app tools tests
@@ -118,6 +116,9 @@ jobs:
       # The bubble's drawing (capsule and panel in all six themes).
       - name: Go tests (bubble)
         run: go test -count=1 ./internal/...
+
+      - name: Go tests (update checks)
+        run: go test -tags desktop,production -count=1 .
 
   website:
     name: Registration website
