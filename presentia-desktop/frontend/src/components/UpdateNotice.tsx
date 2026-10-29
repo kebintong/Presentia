@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { UpdateInfo } from './SettingsPanel'
 import { teacherNotes } from './ReleaseNotes'
+import { API } from '../api'
 
-const API = 'http://127.0.0.1:7788'
 const LATER_KEY = 'presentia.updateLater'
 const LATER_HOURS = 24
 const MONITOR_POLL_MS = 60_000

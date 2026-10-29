@@ -25,26 +25,60 @@ from fastapi import (
     Body,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from app.data import cloud, db
+from app.data import cloud, db, sync
 from app.core import diag, perf
 from app.core.self_mask import SelfMask, paint, soften
 from app.core.face_engine import FaceEngine, MATCH_THRESHOLD
+from app.core.tab_feed import ORIGINS as TAB_ORIGINS
 
 # ── DB init ──────────────────────────────────────────────────────────────────
 db.init_db()
 
 app = FastAPI(title="Presentia Sidecar", version="1.0.0")
 
+# Only Presentia's own pages may use the engine: the desktop window, the dev
+# servers and the pages the engine serves itself (/share). Any other website
+# open in the teacher's browser must not reach the webcam, screen or faces.
+APP_ORIGINS = frozenset({
+    "http://wails.localhost", "wails://wails",            # desktop window (Windows; Linux/macOS)
+    "http://localhost:34115", "http://localhost:5173",    # `wails dev`, `npm run dev`
+    *TAB_ORIGINS,
+})
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=sorted(APP_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class _LocalOnly:
+    """Refuse other websites (Origin) and DNS rebinding (Host) for HTTP and
+    WebSockets alike; CORS never stops a WebSocket or a request's side effects."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            headers = dict(scope["headers"])
+            origin = headers.get(b"origin", b"").decode("latin-1")
+            host = headers.get(b"host", b"").decode("latin-1").rsplit(":", 1)[0]
+            if host not in LOCAL_HOSTS or (origin and origin not in APP_ORIGINS):
+                if scope["type"] == "websocket":
+                    await send({"type": "websocket.close", "code": 1008})
+                else:
+                    await PlainTextResponse("Forbidden", status_code=403)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_LocalOnly)
 
 # Polled several times a second; only logged when they fail.
 _QUIET_PATHS = ("/api/engine/status", "/api/monitor/", "/api/diagnostics", "/api/screen/screenshot")
@@ -779,57 +813,170 @@ async def class_pending(class_id: int) -> list[dict]:
     return out
 
 
+def _review(p: dict) -> tuple[dict, str]:
+    """What accepting this registration does, and the note the instructor
+    sees about it (on the desktop and on the phone)."""
+    face = _unit(np.frombuffer(p["embedding"], dtype=np.float32)) if p["embedding"] is not None else None
+    r = _resolve_pending(p, face, {s["id"] for s in db.list_students(p["class_id"])})
+    m, c = r["match"], r["conflict_with"]
+    note = {
+        "conflict": lambda: (f"Student number {m['student_no']} belongs to {m['name']}, but this face is "
+                             f"{c['name']} ({c['student_no']}). Reject it and check with the student."),
+        "number_taken": lambda: (f"Student number {m['student_no']} belongs to {m['name']}, and this is a "
+                                 "different person. Reject it and ask them to check their student number."),
+        "in_class": lambda: f"{m['name']} ({m['student_no']}) is already in this class.",
+        "no_face": lambda: p["problem"] or ("No usable face in this registration. Reject it and ask the "
+                                            "student to register again."),
+        "join": lambda: f"Already registered as {m['name']} ({m['student_no']}); joins this class.",
+    }.get(r["action"], lambda: "")()
+    return r, note
+
+
+def _accept(p: dict, claim) -> dict:
+    """Accept a website registration into its class. `claim` runs once it
+    can go ahead (the phone app may have decided first)."""
+    r, note = _review(p)
+    if r["action"] in ("conflict", "number_taken", "in_class"):
+        code = "already_in_class" if r["action"] == "in_class" else r["action"]
+        raise HTTPException(status_code=409, detail={"code": code, "message": note})
+    if r["action"] == "no_face":
+        raise HTTPException(status_code=422, detail=note)
+    claim()
+    m = r["match"]
+    if r["action"] == "join":
+        db.add_student_to_class(p["class_id"], m["id"])
+        db.delete_pending(p["id"])
+        return {"result": "linked", "student_id": m["id"], "name": m["name"], "via": r["via"]}
+    face = _unit(np.frombuffer(p["embedding"], dtype=np.float32))
+    student_id = db.add_student(p["student_no"], p["name"], face, p["class_id"])
+    db.delete_pending(p["id"])
+    return {"result": "added", "student_id": student_id, "name": p["name"]}
+
+
+def _claim(p: dict, decision: str) -> None:
+    """First decision wins between this computer and the phone app."""
+    if not sync.signed_in():
+        return
+    try:
+        sync.claim(p["uid"], decision)
+    except sync.SyncError as exc:
+        if exc.status == 409:
+            raise HTTPException(status_code=409, detail={"code": "decided", "message": exc.message}) from exc
+        raise HTTPException(status_code=503, detail=(
+            "No connection to the phone app's cloud, so this can't be decided here right now. "
+            "Check the internet connection, or sign out of the phone app in Settings.")) from exc
+
+
 @app.post("/api/pending/{pending_id}/approve")
 async def approve_pending(pending_id: int) -> dict:
-    """Accept a website registration into its class.
-
-    A student already registered on this computer (same number, or same
+    """A student already registered on this computer (same number, or same
     face) is added to the class with the face data already saved; nobody is
-    stored twice, and nobody is listed twice in one class.
-    """
+    stored twice, and nobody is listed twice in one class."""
     p = db.get_pending(pending_id)
     if p is None:
         raise HTTPException(status_code=404, detail="Registration not found")
-    face = _unit(np.frombuffer(p["embedding"], dtype=np.float32)) if p["embedding"] is not None else None
-    roster = {s["id"] for s in db.list_students(p["class_id"])}
-    r = _resolve_pending(p, face, roster)
-    m = r["match"]
-    if r["action"] == "conflict":
-        c = r["conflict_with"]
-        raise HTTPException(status_code=409, detail={
-            "code": "conflict",
-            "message": (f"Student number {m['student_no']} belongs to {m['name']}, but this face is "
-                        f"{c['name']} ({c['student_no']}). Reject it and check with the student."),
-        })
-    if r["action"] == "number_taken":
-        raise HTTPException(status_code=409, detail={
-            "code": "number_taken",
-            "message": (f"Student number {m['student_no']} belongs to {m['name']}, and this is a "
-                        "different person. Reject it and ask them to check their student number."),
-        })
-    if r["action"] == "in_class":
-        raise HTTPException(status_code=409, detail={
-            "code": "already_in_class",
-            "message": f"{m['name']} ({m['student_no']}) is already in this class.",
-        })
-    if r["action"] == "join":
-        db.add_student_to_class(p["class_id"], m["id"])
-        db.delete_pending(pending_id)
-        return {"result": "linked", "student_id": m["id"], "name": m["name"], "via": r["via"]}
-    if r["action"] == "no_face":
-        raise HTTPException(
-            status_code=422,
-            detail=p["problem"] or "No usable face in this registration. Reject it and ask the "
-                                   "student to register again.",
-        )
-    student_id = db.add_student(p["student_no"], p["name"], face, p["class_id"])
-    db.delete_pending(pending_id)
-    return {"result": "added", "student_id": student_id, "name": p["name"]}
+    return await asyncio.to_thread(_accept, p, lambda: _claim(p, "accepted"))
 
 
 @app.delete("/api/pending/{pending_id}", status_code=204)
 async def reject_pending(pending_id: int) -> None:
-    db.delete_pending(pending_id)
+    p = db.get_pending(pending_id)
+    if p is not None:
+        await asyncio.to_thread(_claim, p, "declined")
+        db.delete_pending(pending_id)
+
+
+# ── Phone app (app/data/sync.py) ──────────────────────────────────────────────
+
+def _phone_decision(p: dict, decision: str) -> tuple[str, str] | None:
+    """Carry out what the phone decided; (action, note) if it can't be done."""
+    if decision == "declined":
+        db.delete_pending(p["id"])
+        return None
+    try:
+        _accept(p, lambda: None)
+    except HTTPException:
+        r, note = _review(p)
+        return r["action"], note
+    return None
+
+
+def _preview(p: dict) -> tuple[str, str]:
+    r, note = _review(p)
+    return r["action"], note
+
+
+def _sync_now() -> None:
+    sync.run(_preview, _phone_decision)
+
+
+def _sync_loop() -> None:
+    while True:
+        time.sleep(sync.INTERVAL)
+        try:
+            if sync.signed_in():
+                _sync_now()
+        except sync.SyncError:
+            pass   # shown in Settings → Phone app (sync.status()["error"])
+        except Exception as exc:  # noqa: BLE001
+            diag.record("sync", f"Phone app sync failed: {exc!r}")
+
+
+if os.environ.get("PRESENTIA_SKIP_ENGINE") != "1":   # not in tests
+    threading.Thread(target=_sync_loop, daemon=True).start()
+
+
+class AccountEmail(BaseModel):
+    email: str
+
+
+class AccountCode(BaseModel):
+    email: str
+    code: str
+
+
+def _sync_error(exc: "sync.SyncError") -> HTTPException:
+    return HTTPException(status_code=exc.status if 400 <= exc.status < 500 else 502, detail=exc.message)
+
+
+@app.get("/api/account")
+async def account() -> dict:
+    return sync.status()
+
+
+@app.post("/api/account/code", status_code=204)
+async def account_code(body: AccountEmail) -> None:
+    if "@" not in body.email:
+        raise HTTPException(status_code=400, detail="Enter your email address.")
+    try:
+        await asyncio.to_thread(sync.send_code, body.email)
+    except sync.SyncError as exc:
+        raise _sync_error(exc) from exc
+
+
+@app.post("/api/account/verify")
+async def account_verify(body: AccountCode) -> dict:
+    try:
+        await asyncio.to_thread(sync.verify, body.email, body.code)
+        await asyncio.to_thread(_sync_now)
+    except sync.SyncError as exc:
+        raise _sync_error(exc) from exc
+    return sync.status()
+
+
+@app.post("/api/account/sync")
+async def account_sync() -> dict:
+    try:
+        await asyncio.to_thread(_sync_now)
+    except sync.SyncError as exc:
+        raise _sync_error(exc) from exc
+    return sync.status()
+
+
+@app.post("/api/account/sign-out")
+async def account_sign_out() -> dict:
+    await asyncio.to_thread(sync.sign_out)
+    return sync.status()
 
 
 @app.get("/api/classes/{class_id}/available-students")

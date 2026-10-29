@@ -9,9 +9,8 @@ import time
 import cv2
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import embedding
+from conftest import embedding, engine_client
 
 
 class FakeEngine:
@@ -35,7 +34,7 @@ def setup(fresh_db, monkeypatch):
     monkeypatch.setattr(FaceEngine, "instance", classmethod(lambda cls: FakeEngine()))
     cls = db.create_class("IT 301")
     db.add_student("1", "Kian", embedding(1), cls["id"])
-    return TestClient(sidecar.app), feed, cls["id"]
+    return engine_client(), feed, cls["id"]
 
 
 def push_frame(feed):

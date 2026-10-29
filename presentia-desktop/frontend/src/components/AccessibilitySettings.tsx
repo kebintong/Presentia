@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-
-const API = 'http://127.0.0.1:7788'
+import { API } from '../api'
 
 interface Checks {
   random_challenges: boolean

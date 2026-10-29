@@ -5,9 +5,8 @@ import base64
 
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import embedding
+from conftest import embedding, engine_client
 
 
 def b64(v: np.ndarray) -> str:
@@ -28,7 +27,7 @@ def near(v: np.ndarray, seed: int, similarity: float = 0.7) -> np.ndarray:
 def api(fresh_db):
     from app import sidecar
 
-    client = TestClient(sidecar.app)
+    client = engine_client()
     cls = client.post("/api/classes", json={"name": "IT 301"}).json()
     return client, cls, fresh_db
 

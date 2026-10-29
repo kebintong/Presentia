@@ -59,6 +59,7 @@ def test_teacher_notes_in_the_app_read_the_published_body():
     assert "Half-visible faces" in teacher and "Edit this" not in teacher
 
 
-def test_real_file_has_notes_for_the_next_release():
+def test_real_file_has_a_next_release_section():
+    # Empty right after each release (rotate clears it); the workflow then keeps a draft.
     text = (Path(__file__).resolve().parents[1] / "RELEASE_NOTES.md").read_text(encoding="utf-8")
-    assert rn.next_notes(text).startswith("- ")
+    assert rn.NEXT in text.splitlines()

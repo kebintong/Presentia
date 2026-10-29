@@ -12,8 +12,8 @@ import { useMonitor, monitorFeed, addMonitorAlert, startMonitor, sendMonitor, st
 import { ClassInfo, classLabel } from '../classes'
 import VerifyDialog, { CheckState, VerifyStudent, newCheck } from '../components/VerifyDialog'
 import TabShareDialog from '../components/TabShareDialog'
+import { API } from '../api'
 
-const API = 'http://127.0.0.1:7788'
 // Bindings added after the generated wailsjs files; called defensively.
 const goApp = () => (window as any)['go']?.['main']?.['App']
 

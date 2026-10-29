@@ -7,14 +7,14 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import embedding
+from conftest import embedding, engine_client
 
 
 @pytest.fixture
 def client(fresh_db):
     from app import sidecar
 
-    return TestClient(sidecar.app)
+    return engine_client()
 
 
 def test_engine_status_answers(client):
@@ -53,3 +53,23 @@ def test_class_student_and_export_flow(client):
 def test_unknown_class_is_404(client):
     assert client.get("/api/classes/999").status_code == 404
     assert client.get("/api/classes/999/export.xlsx").status_code == 404
+
+
+def test_only_presentias_own_pages_may_use_the_engine(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    from app import sidecar
+
+    # The desktop window, and tools that send no Origin (the Go shell): allowed.
+    assert client.get("/api/classes", headers={"origin": "http://wails.localhost"}).status_code == 200
+    assert client.get("/api/classes").status_code == 200
+    # Another website in the teacher's browser: refused, WebSockets included.
+    evil = {"origin": "https://evil.example"}
+    assert client.get("/api/classes", headers=evil).status_code == 403
+    assert client.post("/api/data/delete-all", json={"confirm": "DELETE"}, headers=evil).status_code == 403
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws/camera", headers=evil) as ws:
+            ws.receive_text()
+    # DNS rebinding: a website's own name pointed at 127.0.0.1.
+    rebound = TestClient(sidecar.app, base_url="http://evil.example:7788")
+    assert rebound.get("/api/classes").status_code == 403

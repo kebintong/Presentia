@@ -31,9 +31,9 @@ const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/
 // Numbers, optionally split with space . _ - / (e.g. 2024-00123). No letters.
 const STUDENT_NO_RE = /^[0-9][0-9 ._\-\/]{0,31}$/
 const MAX_BODY = 1_500_000          // bytes, whole registration request
-const MAX_PHOTO = 350_000           // bytes per decoded JPEG
+const MAX_PHOTO = 120_000           // bytes per decoded JPEG (the page sends 480 px, ~50 KB)
 const MAX_PHOTOS = 3
-const MAX_PENDING_PER_CLASS = 500
+const MAX_PENDING_PER_CLASS = 200  // x 3 photos: keeps one class far below D1's 500 MB
 
 // Fixed-window limits per client IP (hashed): [count, seconds]. Generous on
 // purpose: a whole class on campus Wi-Fi usually shares one public IP.

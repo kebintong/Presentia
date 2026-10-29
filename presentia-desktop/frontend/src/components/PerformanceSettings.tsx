@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-
-const API = 'http://127.0.0.1:7788'
+import { API } from '../api'
 
 interface GpuDevice {
   id: string        // "gpu:<index>"

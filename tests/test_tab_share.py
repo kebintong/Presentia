@@ -9,10 +9,9 @@ import time
 import cv2
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from conftest import embedding
+from conftest import embedding, engine_client
 
 
 @pytest.fixture
@@ -22,7 +21,7 @@ def client(fresh_db):
 
     feed = tab_feed.TabFeed()
     sidecar._TAB_FEED = feed
-    return TestClient(sidecar.app), feed
+    return engine_client(), feed
 
 
 def jpeg(colour=(30, 120, 200)):

@@ -5,6 +5,7 @@ import {
   DiagMode, DiagnosticsData, STATUS_LABEL, buildReport, copyText, fetchActivityLog, fetchDiagnostics,
   getMode, onMode, redact, reportFileName, reportsHost, saveText, setDiagnosticMode,
 } from '../diagnostics'
+import { API } from '../api'
 
 const fmt = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''
@@ -74,7 +75,7 @@ export default function DiagnosticsSettings({ version }: { version: string }) {
           if (where) setNote(`Saved to ${where}.`)
         }
       } else if (what === 'delete-log') {
-        await fetch('http://127.0.0.1:7788/api/diagnostics/log', { method: 'DELETE' })
+        await fetch(`${API}/api/diagnostics/log`, { method: 'DELETE' })
         setNote('Activity log deleted.')
         loadLog()
       } else {

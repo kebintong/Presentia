@@ -35,3 +35,18 @@ def embedding(seed: int = 0) -> np.ndarray:
     """A random, normalised 512-d face template."""
     v = np.random.default_rng(seed).standard_normal(512).astype(np.float32)
     return v / np.linalg.norm(v)
+
+
+def engine_client():
+    """A test client that calls the engine the way the app does, on
+    127.0.0.1:7788 (the engine refuses any other host)."""
+    from fastapi.testclient import TestClient
+
+    from app import sidecar
+
+    class EngineClient(TestClient):
+        def websocket_connect(self, url, *args, **kwargs):
+            # Starlette's client would send WebSockets to "testserver".
+            return super().websocket_connect("ws://127.0.0.1:7788" + url, *args, **kwargs)
+
+    return EngineClient(sidecar.app, base_url="http://127.0.0.1:7788")

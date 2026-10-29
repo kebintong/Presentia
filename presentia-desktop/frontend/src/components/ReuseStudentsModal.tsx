@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import Modal from './Modal'
 import { ClassInfo } from '../classes'
-
-const API = 'http://127.0.0.1:7788'
+import { API } from '../api'
 
 interface ReusableStudent {
   id: number

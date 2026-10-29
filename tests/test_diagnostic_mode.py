@@ -4,7 +4,7 @@ itself off after a week, and sends a report only when asked."""
 from datetime import datetime, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
+from conftest import engine_client
 
 
 @pytest.fixture
@@ -12,7 +12,7 @@ def client(fresh_db):
     from app import sidecar
     from app.core import diag
 
-    yield TestClient(sidecar.app), diag
+    yield engine_client(), diag
     diag.set_mode(False)
     diag.clear_log()
 

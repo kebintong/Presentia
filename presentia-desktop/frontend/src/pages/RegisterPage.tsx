@@ -6,11 +6,10 @@ import PipWindow from '../components/PipWindow'
 import CameraViewControls, { useCameraView } from '../components/CameraViewControls'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { ClassInfo, formatJoinCode } from '../classes'
+import { API, WS } from '../api'
 
 const goApp = () => (window as any)['go']?.['main']?.['App']
 
-const API = 'http://127.0.0.1:7788'
-const WS  = 'ws://127.0.0.1:7788'
 
 interface Student {
   id: number

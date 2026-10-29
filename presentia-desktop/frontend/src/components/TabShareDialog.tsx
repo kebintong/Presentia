@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Modal from './Modal'
+import { API } from '../api'
 
-const API = 'http://127.0.0.1:7788'
 const goApp = () => (window as any)['go']?.['main']?.['App']
 
 /** A browser window found on screen (from GetOpenWindows). */

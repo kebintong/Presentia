@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ClipboardSetText } from '../../wailsjs/runtime/runtime'
 import { ClassInfo, formatDateTime, formatJoinCode } from '../classes'
+import { API } from '../api'
 
-const API = 'http://127.0.0.1:7788'
 const AUTO_SYNC_MS = 60_000
 
 interface Pending {
@@ -88,12 +88,24 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
 
   const shareLink = url ? `${url}/?code=${code}` : ''
 
+  const shown = useRef<Set<number>>(new Set())
   const loadPending = useCallback(async () => {
     try {
       const res = await fetch(`${API}/api/classes/${classInfo.id}/pending`)
-      if (res.ok) setPending(await res.json())
+      if (!res.ok) return
+      const list: Pending[] = await res.json()
+      // One that left without a click here was decided in the phone app.
+      if ([...shown.current].some((id) => !list.some((p) => p.id === id))) onRosterChanged()
+      shown.current = new Set(list.map((p) => p.id))
+      setPending(list)
     } catch { /* sidecar restarting */ }
-  }, [classInfo.id])
+  }, [classInfo.id, onRosterChanged])
+
+  // The phone app can decide too (Settings → Phone app): keep the list current.
+  useEffect(() => {
+    const t = setInterval(loadPending, 5_000)
+    return () => clearInterval(t)
+  }, [loadPending])
 
   const load = useCallback(async () => {
     try {
@@ -211,11 +223,13 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
         })
         onRosterChanged()
       }
+      shown.current.delete(p.id)
       setPending((list) => list.filter((x) => x.id !== p.id))
       // Accepting one can make another waiting registration a duplicate.
       if (accept) loadPending()
     } catch (err: any) {
       setMessage({ text: err.message, error: true })
+      loadPending()   // e.g. already decided on the phone
     } finally {
       setBusy('')
     }

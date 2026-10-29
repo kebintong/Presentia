@@ -2,9 +2,8 @@
 
 import base64
 
-from fastapi.testclient import TestClient
 
-from conftest import embedding
+from conftest import embedding, engine_client
 
 
 def test_delete_all_data(fresh_db, monkeypatch):
@@ -12,7 +11,7 @@ def test_delete_all_data(fresh_db, monkeypatch):
     from app.data import cloud
 
     db = fresh_db
-    c = TestClient(sidecar.app)
+    c = engine_client()
     cls = c.post("/api/classes", json={"name": "IT 301"}).json()
     face = embedding(7)
     c.post("/api/students", json={"student_no": "2023-0001", "name": "Ana",
