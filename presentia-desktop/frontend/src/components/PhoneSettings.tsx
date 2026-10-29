@@ -24,6 +24,8 @@ export default function PhoneSettings() {
   const [email, setEmail] = useState('')
   const [code, setCode] = useState('')
   const [codeSent, setCodeSent] = useState(false)
+  const [resendAt, setResendAt] = useState(0)
+  const [now, setNow] = useState(Date.now())
   const [agreed, setAgreed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -42,6 +44,22 @@ export default function PhoneSettings() {
     const t = setInterval(load, 10_000)
     return () => clearInterval(t)
   }, [load])
+
+  // Supabase allows one code per email every 60 seconds.
+  useEffect(() => {
+    if (resendAt <= Date.now()) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [resendAt])
+  const wait = Math.max(0, Math.ceil((resendAt - now) / 1000))
+
+  const sendCode = async () => {
+    await post('/api/account/code', { email })
+    // Show the code box even if this send was refused: a code from an earlier email still works.
+    setCodeSent(true)
+    setResendAt(Date.now() + 60_000)
+    setNow(Date.now())
+  }
 
   const post = async (path: string, body?: object) => {
     setBusy(true)
@@ -148,8 +166,8 @@ export default function PhoneSettings() {
       <div className="diag-actions">
         {codeSent ? (
           <>
-            <button className="btn-ghost" disabled={busy} onClick={() => post('/api/account/code', { email })}>
-              Send a new code
+            <button className="btn-ghost" disabled={busy || wait > 0} onClick={sendCode}>
+              {wait > 0 ? `Send a new code (${wait} s)` : 'Send a new code'}
             </button>
             <button className="btn-primary" disabled={busy || code.length < 6}
                     onClick={() => post('/api/account/verify', { email, code })}>
@@ -158,7 +176,7 @@ export default function PhoneSettings() {
           </>
         ) : (
           <button className="btn-primary" disabled={busy || !agreed || !email.includes('@')}
-                  onClick={async () => setCodeSent(await post('/api/account/code', { email }))}>
+                  onClick={sendCode}>
             {busy ? 'Sending…' : 'Email me a code'}
           </button>
         )}
