@@ -200,8 +200,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PUBLISH: ${{ inputs.publish && steps.notes.outputs.written == 'true' }}
         run: |
-          $draft = if ($env:PUBLISH -eq 'true') { @() } else { @('--draft') }
-          gh release create "v$env:VERSION" @draft --title "Presentia $env:VERSION" `
+          # One plain argument: splatting a one-item list here passed "-" "-" "d" ... to gh.
+          $draft = if ($env:PUBLISH -eq 'true') { '--draft=false' } else { '--draft' }
+          gh release create "v$env:VERSION" $draft --title "Presentia $env:VERSION" `
             --notes-file release-notes.md `
             build\output\PresentiaSetup.exe build\output\PresentiaSetup.exe.sha256
           if ($LASTEXITCODE) { throw "Could not create the release" }
