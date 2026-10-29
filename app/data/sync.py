@@ -34,8 +34,8 @@ from app.data.cloud import _urlopen, _why  # same HTTPS certificate handling
 # The Supabase project the phone app uses (Project Settings → API). The
 # publishable (anon) key is meant to be inside apps: row-level security
 # decides what each teacher can see. Never put the service_role key here.
-SUPABASE_URL = ""
-SUPABASE_KEY = ""
+SUPABASE_URL = "https://xgyzufobwmmlansdbvmm.supabase.co"
+SUPABASE_KEY = "sb_publishable_EXwjXnAGh1s1_IsDWdZuHA_vbNMXPbo"
 
 INTERVAL = 5          # seconds between syncs while signed in
 _OVERLAP = 60         # seconds re-read on each pull, for changes committed late
