@@ -1958,7 +1958,9 @@ async def _run_until_first_done(*coros) -> None:
         for task in tasks:
             if not task.done():
                 task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        # wait, not gather: a gather cancelled under it raises its own CancelledError, which
+        # the server (anyio) can't match to its cancel and reports as a crash.
+        await asyncio.wait(tasks)
 
 
 # ── WebSocket: /ws/camera  (Register page + Session page webcam) ─────────────
