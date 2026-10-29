@@ -233,7 +233,7 @@ Details and the by-hand fallback are in [`build/BUILD.md`](build/BUILD.md).
 
 | Workflow | When | What |
 |---|---|---|
-| [CI](.github/workflows/ci.yml) | every push and pull request | Python tests, frontend build, Windows build of the Go shell, website dry run; on `main`, deploys the website when `web/` changed and everything passed |
+| [CI](.github/workflows/ci.yml) | every push and pull request | Python tests, frontend build, Windows build of the Go shell, website dry run, Supabase rules on Postgres; on `main`, deploys the website when `web/` changed and everything passed |
 | [Engine build](.github/workflows/engine-build.yml) | changes to the engine, its dependencies or build list | builds the frozen engine on Windows and starts it once |
 | [Release](.github/workflows/release.yml) | by hand (version box) | checks, builds the installer, tags, drafts the release |
 | [Dependabot](.github/dependabot.yml) | monthly | grouped update pull requests for GitHub Actions, npm and Go packages |
