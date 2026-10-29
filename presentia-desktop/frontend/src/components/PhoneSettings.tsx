@@ -149,14 +149,13 @@ export default function PhoneSettings() {
       {codeSent && (
         <>
           <label className="field-label" htmlFor="phone-code" style={{ margin: 0 }}>
-            Code from the email
+            Code from the email (or paste its sign-in link)
           </label>
           <input
             id="phone-code"
             className="input mono"
             value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 10))}
-            inputMode="numeric"
+            onChange={(e) => setCode(e.target.value.trim())}
             autoComplete="one-time-code"
             autoFocus
           />

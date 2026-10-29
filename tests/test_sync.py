@@ -212,3 +212,20 @@ def test_signed_out_nothing_is_claimed(fresh_db):
     cls = fresh_db.create_class("IT 301")
     p = _pending(fresh_db, cls["id"])
     assert client.post(f"/api/pending/{p['id']}/approve").status_code == 200
+
+
+def test_sign_in_with_a_code_or_the_emailed_link(fresh_db, monkeypatch):
+    from app.data import sync
+
+    sent = []
+    session = {"access_token": "a", "refresh_token": "r", "expires_in": 3600,
+               "user": {"id": "u1", "email": "t@school.edu"}}
+    monkeypatch.setenv("PRESENTIA_SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setattr(sync, "_http", lambda method, path, body=None, **kw: sent.append(body) or session)
+
+    sync.verify("t@school.edu", " 123456 ")
+    sync.verify("t@school.edu", "https://example.supabase.co/auth/v1/verify?token=ab12cd&type=magiclink"
+                                "&redirect_to=https://presentia.example")
+    assert sent == [{"type": "email", "email": "t@school.edu", "token": "123456"},
+                    {"type": "magiclink", "token_hash": "ab12cd"}]
+    assert sync.signed_in()
