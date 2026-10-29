@@ -23,6 +23,7 @@ import sqlite3
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -137,8 +138,14 @@ def send_code(email: str) -> None:
 
 
 def verify(email: str, code: str) -> dict:
-    out = _http("POST", "/auth/v1/verify", {"type": "email", "email": email.strip(), "token": code.strip()},
-                auth=False)
+    """Sign in with the emailed code, or with the sign-in link pasted whole
+    (sent when the project's email template still has a link)."""
+    link = urllib.parse.parse_qs(urllib.parse.urlsplit(code.strip()).query)
+    if "token" in link:
+        body = {"type": link.get("type", ["magiclink"])[0], "token_hash": link["token"][0]}
+    else:
+        body = {"type": "email", "email": email.strip(), "token": code.strip()}
+    out = _http("POST", "/auth/v1/verify", body, auth=False)
     _save_session(out)
     db.set_setting(_K_EMAIL, out.get("user", {}).get("email") or email.strip())
     db.set_setting(_K_USER, out.get("user", {}).get("id", ""))
