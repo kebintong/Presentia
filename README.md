@@ -2,6 +2,13 @@
 
 [![CI](https://github.com/kebintong/Presentia/actions/workflows/ci.yml/badge.svg)](https://github.com/kebintong/Presentia/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/kebintong/Presentia?label=download)](https://github.com/kebintong/Presentia/releases/latest)
+[![Wails](https://img.shields.io/badge/Desktop-Wails_v2-df0000?logo=go&logoColor=white)](https://wails.io/)
+[![React](https://img.shields.io/badge/Frontend-React_19_+_TypeScript-61dafb?logo=react&logoColor=black)](https://react.dev/)
+[![FastAPI](https://img.shields.io/badge/Engine-Python_3.12_+_FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![ONNX Runtime](https://img.shields.io/badge/Face_models-ONNX_Runtime-blueviolet)](https://onnxruntime.ai/)
+[![MediaPipe](https://img.shields.io/badge/Liveness-MediaPipe-blue)](https://developers.google.com/mediapipe)
+[![Cloudflare](https://img.shields.io/badge/Registration_site-Cloudflare_Workers-f38020?logo=cloudflare&logoColor=white)](web/README.md)
+[![Supabase](https://img.shields.io/badge/Phone_app_sync-Supabase-3ecf8e?logo=supabase&logoColor=white)](supabase/README.md)
 
 **Presentia** is a Windows desktop app that takes attendance in online classes. It recognises each student by face,
 with a live check against photos and recordings, while it watches the Google Meet, Zoom or Teams window. Every record
