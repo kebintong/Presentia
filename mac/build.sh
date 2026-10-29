@@ -17,12 +17,19 @@ cd "$ROOT"
 
 step() { printf '\n== %s\n' "$1"; }
 
+# Check the tools first, not after the slow engine build. `go install` puts
+# wails in Go's own bin folder, which is often not on PATH.
+export PATH="$PATH:$(go env GOPATH 2>/dev/null)/bin"
+for tool in python3.12 go npm wails; do
+  command -v "$tool" >/dev/null || { echo "Missing: $tool (see mac/README.md, One-time setup)"; exit 1; }
+done
+
 step "Python dependencies (mac/.venv)"
 [ -d "$VENV" ] || python3.12 -m venv "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip -q
 # On an Intel Mac pip picks the newest versions that still ship Intel
 # builds (onnxruntime 1.23.x, mediapipe 0.10.21); requirements.txt allows them.
-"$VENV/bin/pip" install -q -r requirements.txt "pyinstaller>=6.10"
+"$VENV/bin/pip" install --progress-bar on -r requirements.txt "pyinstaller>=6.10"
 
 step "Engine (PyInstaller, same build file as Windows)"
 "$VENV/bin/pyinstaller" build/presentia-sidecar.spec --noconfirm --clean
