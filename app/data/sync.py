@@ -2,8 +2,9 @@
 waiting registrations with the teacher's Supabase account, where the
 Presentia phone app reads and adds to them.
 
-Optional: nothing leaves this computer until the teacher signs in (Settings →
-Phone app, with a code sent by email). The database here stays the working
+Optional: nothing leaves this computer until the teacher signs in (first-start
+screens or Settings → Phone app; email and password, with a code emailed once
+to confirm the address). The database here stays the working
 copy, so Presentia works the same offline. Every few seconds, while signed
 in, run() uploads what changed here and applies what changed elsewhere
 (supabase/migrations/0001_presentia.sql describes the rules: last change
@@ -133,19 +134,58 @@ def _token() -> str:
 
 # ── signing in ───────────────────────────────────────────────────────────
 
-def send_code(email: str) -> None:
-    _http("POST", "/auth/v1/otp", {"email": email.strip(), "create_user": True}, auth=False)
+def sign_up(email: str, password: str) -> dict:
+    """Create the account. Supabase emails a code to confirm the address
+    (status()["needs_code"]), unless the project skips that step."""
+    out = _http("POST", "/auth/v1/signup", {"email": email.strip(), "password": password}, auth=False)
+    if out and out.get("access_token"):
+        return _signed_in(out, email)
+    return {**status(), "needs_code": True}
 
 
-def verify(email: str, code: str) -> dict:
-    """Sign in with the emailed code, or with the sign-in link pasted whole
-    (sent when the project's email template still has a link)."""
+def resend_code(email: str) -> None:
+    _http("POST", "/auth/v1/resend", {"type": "signup", "email": email.strip()}, auth=False)
+
+
+def confirm(email: str, code: str) -> dict:
+    """Finish signing up with the emailed code."""
+    return _signed_in(_verify(email, code, "signup"), email)
+
+
+def sign_in(email: str, password: str) -> dict:
+    out = _http("POST", "/auth/v1/token?grant_type=password",
+                {"email": email.strip(), "password": password}, auth=False)
+    return _signed_in(out, email)
+
+
+def forgot_password(email: str) -> None:
+    _http("POST", "/auth/v1/recover", {"email": email.strip()}, auth=False)
+
+
+def reset_password(email: str, code: str, password: str) -> dict:
+    """Sign in with the emailed reset code and set the new password."""
+    out = _verify(email, code, "recovery")
+    _save_session(out)
+    try:
+        _http("PUT", "/auth/v1/user", {"password": password})
+    except SyncError:
+        _forget()   # not signed in with the old password half-replaced
+        raise
+    return _signed_in(out, email)
+
+
+def _verify(email: str, code: str, kind: str) -> dict:
+    """The emailed code, or the emailed link pasted whole (sent when the
+    project's email template still has a link instead of the code)."""
     link = urllib.parse.parse_qs(urllib.parse.urlsplit(code.strip()).query)
     if "token" in link:
-        body = {"type": link.get("type", ["magiclink"])[0], "token_hash": link["token"][0]}
+        body = {"type": link.get("type", [kind])[0], "token_hash": link["token"][0]}
     else:
-        body = {"type": "email", "email": email.strip(), "token": code.strip()}
-    out = _http("POST", "/auth/v1/verify", body, auth=False)
+        body = {"type": kind, "email": email.strip(), "token": code.strip()}
+    return _http("POST", "/auth/v1/verify", body, auth=False)
+
+
+def _signed_in(out: dict, email: str) -> dict:
     _save_session(out)
     db.set_setting(_K_EMAIL, out.get("user", {}).get("email") or email.strip())
     db.set_setting(_K_USER, out.get("user", {}).get("id", ""))

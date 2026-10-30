@@ -10,6 +10,8 @@ import SettingsPanel, { UpdateInfo, Tab as SettingsTab } from './components/Sett
 import type { ReleaseNote } from './components/UpdateHistory'
 import UpdateNotice from './components/UpdateNotice'
 import ProblemPrompt from './components/ProblemPrompt'
+import Onboarding from './components/Onboarding'
+import { TERMS_VERSION } from './components/TermsText'
 import RegisterPage from './pages/RegisterPage'
 import MeetPage from './pages/MeetPage'
 import SessionPage from './pages/SessionPage'
@@ -132,6 +134,24 @@ export default function App() {
       return !v
     })
   }
+
+  // First start (or new terms): which screens to show, once the engine answers.
+  const [setup, setSetup] = useState<'full' | 'terms' | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const ask = async () => {
+      while (!cancelled) {
+        try {
+          const s = await (await fetch(`${API}/api/setup`)).json()
+          if (s.terms_version !== TERMS_VERSION) setSetup(!s.terms_version && !s.has_data ? 'full' : 'terms')
+          return
+        } catch { /* engine still starting */ }
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+    }
+    ask()
+    return () => { cancelled = true }
+  }, [])
 
   // Poll engine status until ready
   useEffect(() => {
@@ -287,10 +307,12 @@ export default function App() {
       />
 
       {/* A newer version is out: say so once, outside monitoring. */}
-      <UpdateNotice update={update} hidden={settingsOpen} onOpen={() => openSettings('updates')} />
+      <UpdateNotice update={update} hidden={settingsOpen || !!setup} onOpen={() => openSettings('updates')} />
 
       {/* Diagnostic mode: offers a report when something fails. */}
       <ProblemPrompt version={version} />
+
+      {setup && <Onboarding mode={setup} onDone={() => setSetup(null)} />}
     </>
   )
 }

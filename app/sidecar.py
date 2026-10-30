@@ -618,6 +618,37 @@ async def delete_class(class_id: int) -> dict:
 
 # ── All data (Settings → Data) ───────────────────────────────────────────────
 
+# ── First start (Welcome, Terms of Use and Privacy, phone app) ───────────────
+#
+# The app owns the terms text and its version; the engine keeps which
+# version was accepted and when, so a changed text is asked for again and
+# there is a record of the teacher's agreement. Kept by Delete all data.
+
+class TermsAcceptance(BaseModel):
+    version: str
+
+
+@app.get("/api/setup")
+async def setup_state() -> dict:
+    accepted = json.loads(db.get_setting("terms_accepted") or "null") or {}
+    counts = db.data_summary()
+    return {
+        "terms_version": accepted.get("version"),
+        "terms_accepted_at": accepted.get("at"),
+        "has_data": bool(counts["classes"] or counts["students"]),
+    }
+
+
+@app.post("/api/setup/accept")
+async def setup_accept(body: TermsAcceptance) -> dict:
+    version = body.version.strip()[:40]
+    if not version:
+        raise HTTPException(status_code=400, detail="Missing terms version.")
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    db.set_setting("terms_accepted", json.dumps({"version": version, "at": stamp}))
+    return await setup_state()
+
+
 @app.get("/api/data/summary")
 async def data_summary() -> dict:
     return {**db.data_summary(), "data_folder": str(db.DB_PATH.parent)}
@@ -925,17 +956,41 @@ if os.environ.get("PRESENTIA_SKIP_ENGINE") != "1":   # not in tests
     threading.Thread(target=_sync_loop, daemon=True).start()
 
 
-class AccountEmail(BaseModel):
+class AccountForm(BaseModel):
     email: str
+    password: str = ""
+    code: str = ""
 
 
-class AccountCode(BaseModel):
-    email: str
-    code: str
+PASSWORD_MIN = 8
+
+
+def _check_account(body: AccountForm, password: bool = False, code: bool = False) -> None:
+    if "@" not in body.email:
+        raise HTTPException(status_code=400, detail="Enter your email address.")
+    if password and len(body.password) < PASSWORD_MIN:
+        raise HTTPException(status_code=400, detail=f"Use a password of at least {PASSWORD_MIN} characters.")
+    if code and not body.code.strip():
+        raise HTTPException(status_code=400, detail="Enter the code from the email.")
 
 
 def _sync_error(exc: "sync.SyncError") -> HTTPException:
     return HTTPException(status_code=exc.status if 400 <= exc.status < 500 else 502, detail=exc.message)
+
+
+async def _account_call(fn, *args) -> dict:
+    """Run an account step; once signed in, sync right away. A failed first
+    sync doesn't undo the sign-in: it shows in Settings → Phone app."""
+    try:
+        out = await asyncio.to_thread(fn, *args)
+    except sync.SyncError as exc:
+        raise _sync_error(exc) from exc
+    if sync.signed_in():
+        try:
+            await asyncio.to_thread(_sync_now)
+        except sync.SyncError:
+            pass
+    return {**(out or {}), **sync.status()}
 
 
 @app.get("/api/account")
@@ -943,24 +998,44 @@ async def account() -> dict:
     return sync.status()
 
 
-@app.post("/api/account/code", status_code=204)
-async def account_code(body: AccountEmail) -> None:
-    if "@" not in body.email:
-        raise HTTPException(status_code=400, detail="Enter your email address.")
-    try:
-        await asyncio.to_thread(sync.send_code, body.email)
-    except sync.SyncError as exc:
-        raise _sync_error(exc) from exc
+@app.post("/api/account/sign-up")
+async def account_sign_up(body: AccountForm) -> dict:
+    """Create an account; a code to confirm the email address is sent."""
+    _check_account(body, password=True)
+    return await _account_call(sync.sign_up, body.email, body.password)
 
 
-@app.post("/api/account/verify")
-async def account_verify(body: AccountCode) -> dict:
-    try:
-        await asyncio.to_thread(sync.verify, body.email, body.code)
-        await asyncio.to_thread(_sync_now)
-    except sync.SyncError as exc:
-        raise _sync_error(exc) from exc
-    return sync.status()
+@app.post("/api/account/confirm")
+async def account_confirm(body: AccountForm) -> dict:
+    _check_account(body, code=True)
+    return await _account_call(sync.confirm, body.email, body.code)
+
+
+@app.post("/api/account/resend")
+async def account_resend(body: AccountForm) -> dict:
+    _check_account(body)
+    return await _account_call(sync.resend_code, body.email)
+
+
+@app.post("/api/account/sign-in")
+async def account_sign_in(body: AccountForm) -> dict:
+    _check_account(body)
+    if not body.password:
+        raise HTTPException(status_code=400, detail="Enter your password.")
+    return await _account_call(sync.sign_in, body.email, body.password)
+
+
+@app.post("/api/account/forgot")
+async def account_forgot(body: AccountForm) -> dict:
+    """Email a code to set a new password."""
+    _check_account(body)
+    return await _account_call(sync.forgot_password, body.email)
+
+
+@app.post("/api/account/reset")
+async def account_reset(body: AccountForm) -> dict:
+    _check_account(body, password=True, code=True)
+    return await _account_call(sync.reset_password, body.email, body.code, body.password)
 
 
 @app.post("/api/account/sync")

@@ -7,11 +7,14 @@ never signs in keeps everything on their computer.
 
 1. **Region.** Create the project in *Southeast Asia (Singapore)*, closest to the Philippines.
 2. **Tables.** Run `migrations/0001_presentia.sql` in the SQL editor (or `supabase db push`).
-3. **Sign-in by code.** Authentication → Sign In / Providers → Email: keep *Email* on.
-   Authentication → Emails: in **both** the *Confirm signup* template (a teacher's first sign-in) and
-   the *Magic Link* template (every sign-in after), replace `{{ .ConfirmationURL }}` with the code, e.g.
-   `<p>Your Presentia code: <strong>{{ .Token }}</strong></p>`. The apps ask for that code; they
-   can't open a link. One code per email address every 60 seconds; the desktop counts that down.
+3. **Accounts: email + password.** Authentication → Sign In / Providers → Email: keep *Email* on and
+   *Confirm email* on; set the minimum password length to 8 (the apps ask for 8).
+   Emails are sent only to confirm a new account and to reset a forgotten password, each with a
+   6-digit code. Authentication → Emails: in the *Confirm signup* and the *Reset password* templates,
+   replace `{{ .ConfirmationURL }}` with the code, e.g.
+   `<p>Your Presentia code: <strong>{{ .Token }}</strong></p>`. (Editing templates needs custom SMTP,
+   step 4. If an email still has a link, the desktop also accepts the link pasted into the code box.)
+   One email per address every 60 seconds; the desktop counts that down.
 4. **Email sending.** Supabase's built-in email sends only a few emails an hour and only to your own
    team's addresses. Before teachers use it, set up your own SMTP under Authentication → Emails → SMTP
    (Resend, Brevo, your school's mail server).
