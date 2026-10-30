@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,6 +118,11 @@ func (a *App) CheckForUpdate(force bool) (UpdateInfo, error) {
 
 	if strings.HasPrefix(GitHubRepo, "CHANGEME") {
 		return info, nil // update checking not configured yet
+	}
+	// Releases carry only the Windows installer; the Mac app is built with
+	// mac/build.sh and updated by building again.
+	if runtime.GOOS != "windows" {
+		return info, nil
 	}
 
 	cachePath := updateCachePath()

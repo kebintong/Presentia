@@ -17,7 +17,7 @@ the Mac build reuses the same app code (`app/`, `presentia-desktop/`) and the sa
 | Meeting Monitor: **pick a window** (keeps watching when covered) | ❌ Windows only (Windows Graphics Capture) |
 | Bubble mode, tray icon, stats chip, Live View | ❌ Windows only |
 | GPU (DirectML) | ❌ runs on the CPU |
-| In-app updates | ❌ download the new `.dmg` instead (see below) |
+| In-app updates | ❌ not offered on Mac; build the new version instead (see below) |
 
 Needs **macOS 13 Ventura or later** on an **Intel** Mac.
 
@@ -58,7 +58,8 @@ instead of on a teacher's Mac.
 1. Open the `.dmg` and drag **Presentia** to **Applications**.
 2. Open it. The app is **not signed**, so a Mac that downloaded it will say it can't check it:
    **System Settings → Privacy & Security →** scroll down → **Open Anyway**. (Only the first time.)
-3. Allow the **camera** when asked (registration and check-in).
+3. Allow the **camera** when asked (registration and check-in). The first try after allowing it can fail: press
+   Start again.
 4. For **screen area** monitoring: **System Settings → Privacy & Security → Screen & System Audio Recording**,
    turn on **Presentia**, then quit and reopen it. Without this the picture is only the desktop background.
 
@@ -67,9 +68,8 @@ on first launch (about 195 MB), like on Windows.
 
 ## Updates
 
-The update notice in Settings → Updates comes from the Windows releases: **don't press install on a Mac** (it
-downloads the Windows installer). Build the new version with `mac/build.sh` and drag it into Applications again;
-your data stays.
+Releases contain only the Windows installer, so the Mac app doesn't offer updates. Build the new version with
+`mac/build.sh` and drag it into Applications again; your data stays.
 
 ## Running from source (for development)
 
