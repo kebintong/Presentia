@@ -21,6 +21,8 @@ interface TopBarProps {
   onSwitchClass?: () => void
   /** Only the window buttons, on a see-through bar (first-start screens). */
   bare?: boolean
+  /** The phone app page is open (it is not one of the class pages). */
+  phoneOpen?: boolean
 }
 
 export default function TopBar({
@@ -32,6 +34,7 @@ export default function TopBar({
   activeClass = null,
   onSwitchClass,
   bare = false,
+  phoneOpen = false,
 }: TopBarProps) {
   // Window control actions (Wails Go binding + Runtime fallback)
   const handleMinimise = () => {
@@ -89,12 +92,13 @@ export default function TopBar({
           </button>
         )}
         <span className="top-page-tag">
-          {!activeClass && 'Your Classes'}
-          {activeClass && activePage === 'register' && 'Student Registration'}
-          {activeClass && activePage === 'students' && 'Students'}
-          {activeClass && activePage === 'meet' && 'Meeting Monitor'}
-          {activeClass && activePage === 'session' && 'Class Session'}
-          {activeClass && activePage === 'reports' && 'Attendance Reports'}
+          {phoneOpen && 'Phone App'}
+          {!phoneOpen && !activeClass && 'Your Classes'}
+          {!phoneOpen && activeClass && activePage === 'register' && 'Student Registration'}
+          {!phoneOpen && activeClass && activePage === 'students' && 'Students'}
+          {!phoneOpen && activeClass && activePage === 'meet' && 'Meeting Monitor'}
+          {!phoneOpen && activeClass && activePage === 'session' && 'Class Session'}
+          {!phoneOpen && activeClass && activePage === 'reports' && 'Attendance Reports'}
         </span>
       </div>}
 

@@ -137,8 +137,8 @@ export default function Onboarding({ mode, engine, onDone }: {
               new registrations from your phone. It needs a free account, and your classes are then copied to it.
             </p>
             <p className="settings-row-sub">
-              Not now? Presentia works fully without an account. You can turn it on later in
-              Settings → Phone app.
+              Not now? Presentia works fully without an account. You can turn it on later with the
+              phone icon in the sidebar.
             </p>
             <div className="diag-actions">
               <button className="btn-ghost" onClick={finish}>Not now</button>
@@ -152,8 +152,8 @@ export default function Onboarding({ mode, engine, onDone }: {
             <h2>Your Presentia account</h2>
             {!engine.up && (
               <div className="settings-msg" role="status">
-                Presentia is still starting. Signing in works once it is up, or skip and do it later in
-                Settings → Phone app.
+                Presentia is still starting. Signing in works once it is up, or skip and do it later with
+                the phone icon in the sidebar.
               </div>
             )}
             <AccountForm onSignedIn={finish} />

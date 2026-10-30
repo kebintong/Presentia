@@ -1,6 +1,6 @@
 # Presentia cloud (Supabase)
 
-Shared by Presentia Desktop (Settings → Phone app) and the Presentia phone app. Optional: a teacher who
+Shared by Presentia Desktop (the Phone App page in its sidebar) and the Presentia phone app. Optional: a teacher who
 never signs in keeps everything on their computer.
 
 ## One-time setup

@@ -3,7 +3,7 @@ waiting registrations with the teacher's Supabase account, where the
 Presentia phone app reads and adds to them.
 
 Optional: nothing leaves this computer until the teacher signs in (first-start
-screens or Settings → Phone app; email and password, with a code emailed once
+screens or the Phone App page in the sidebar; email and password, with a code emailed once
 to confirm the address). The database here stays the working
 copy, so Presentia works the same offline. Every few seconds, while signed
 in, run() uploads what changed here and applies what changed elsewhere

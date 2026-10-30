@@ -7,7 +7,6 @@ import PerformanceSettings from './PerformanceSettings'
 import AccessibilitySettings from './AccessibilitySettings'
 import DiagnosticsSettings from './DiagnosticsSettings'
 import DataSettings from './DataSettings'
-import PhoneSettings from './PhoneSettings'
 import ReleaseNotes from './ReleaseNotes'
 import UpdateHistory, { ReleaseNote } from './UpdateHistory'
 
@@ -27,7 +26,7 @@ export interface UpdateInfo {
 }
 
 type Phase = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
-export type Tab = 'appearance' | 'performance' | 'accessibility' | 'updates' | 'phone' | 'data' | 'diagnostics'
+export type Tab = 'appearance' | 'performance' | 'accessibility' | 'updates' | 'data' | 'diagnostics'
 
 const TAB_KEY = 'presentia.settingsTab'
 const TABS: { id: Tab; label: string }[] = [
@@ -35,7 +34,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'performance', label: 'Performance' },
   { id: 'accessibility', label: 'Accessibility' },
   { id: 'updates', label: 'Updates' },
-  { id: 'phone', label: 'Phone app' },
   { id: 'data', label: 'Data' },
   { id: 'diagnostics', label: 'Diagnostics' },
 ]
@@ -231,7 +229,6 @@ export default function SettingsPanel({
         {tab === 'accessibility' && <AccessibilitySettings />}
 
         {/* ── Software updates ─────────────────────────────────── */}
-        {tab === 'phone' && <PhoneSettings />}
         {tab === 'data' && <DataSettings />}
         {tab === 'diagnostics' && <DiagnosticsSettings version={version} />}
 

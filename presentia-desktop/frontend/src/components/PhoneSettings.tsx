@@ -8,9 +8,8 @@ const detail = async (res: Response) => {
 }
 
 /**
- * Settings → Phone app: sign in so the Presentia phone app sees this
- * computer's classes, takes in-person attendance and decides registrations.
- * Optional; without it everything stays on this computer.
+ * The phone app account (pages/PhonePage.tsx): sign in so the Presentia phone
+ * app sees this computer's classes, or see the sync status once signed in.
  */
 export default function PhoneSettings() {
   const [account, setAccount] = useState<Account | null>(null)
@@ -61,7 +60,7 @@ export default function PhoneSettings() {
   if (account.signed_in) {
     return (
       <div className="settings-section">
-        <span className="field-label">Phone app</span>
+        <span className="field-label">Your account</span>
         <dl className="diag-kv">
           <dt>Signed in as</dt><dd>{account.email}</dd>
           <dt>Last synced</dt><dd>{account.last_sync || 'Not yet'}</dd>
@@ -85,11 +84,7 @@ export default function PhoneSettings() {
 
   return (
     <div className="settings-section">
-      <span className="field-label">Phone app</span>
-      <div className="settings-row-sub">
-        Use the Presentia phone app for in-person attendance, random recitation and accepting
-        registrations. Presentia works without it, and nothing leaves this computer until you sign in.
-      </div>
+      <span className="field-label">Sign in or create an account</span>
       <AccountForm onSignedIn={setAccount} />
     </div>
   )

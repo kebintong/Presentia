@@ -7,6 +7,9 @@ interface SidebarProps {
   onNavigate: (page: Page) => void
   engineReady: boolean
   onOpenSettings?: () => void
+  /** The phone app page: open (highlighted) and how to open or close it. */
+  phoneOpen?: boolean
+  onTogglePhone?: () => void
   /** Shows a red dot on the settings gear when an update is waiting. */
   updateAvailable?: boolean
   /** False on the start screen: the pages need a class to work on. */
@@ -83,14 +86,14 @@ const NAV_ITEMS: NavItem[] = [
 ]
 
 export default function Sidebar({
-  active, onNavigate, engineReady, onOpenSettings, updateAvailable, showNav = true,
+  active, onNavigate, engineReady, onOpenSettings, updateAvailable, showNav = true, phoneOpen = false, onTogglePhone,
 }: SidebarProps) {
   return (
     <aside className="launcher-sidebar">
       {/* Navigation Icons Stack */}
       <div className="sidebar-nav-stack">
         {showNav && NAV_ITEMS.map((item) => {
-          const isActive = active === item.id
+          const isActive = !phoneOpen && active === item.id
           return (
             <button
               key={item.id}
@@ -108,8 +111,22 @@ export default function Sidebar({
         })}
       </div>
 
-      {/* Bottom section: Settings & Status */}
+      {/* Bottom section: Phone app & Settings */}
       <div className="sidebar-bottom-stack">
+        <button
+          className={`sidebar-icon-btn bottom-btn ${phoneOpen ? 'active' : ''}`}
+          onClick={onTogglePhone}
+          title="Phone app"
+          aria-label="Phone app"
+          aria-pressed={phoneOpen}
+        >
+          <div className="icon-wrapper">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="6" y="2" width="12" height="20" rx="2.5" />
+              <path d="M11 18h2" />
+            </svg>
+          </div>
+        </button>
         <button
           className="sidebar-icon-btn bottom-btn"
           onClick={onOpenSettings}
