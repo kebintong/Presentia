@@ -23,7 +23,7 @@ const detail = async (res: Response) => {
  * The phone app account: sign in with email and password, or create one
  * (a code is emailed once to confirm the address), or reset a forgotten
  * password with an emailed code. Used by the first-start screens and by
- * Settings → Phone app.
+ * the Phone App page (sidebar).
  */
 export default function AccountForm({ onSignedIn }: { onSignedIn: (account: Account) => void }) {
   const [mode, setMode] = useState<Mode>('sign-in')

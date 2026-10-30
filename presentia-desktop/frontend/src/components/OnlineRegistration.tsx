@@ -101,7 +101,7 @@ export default function OnlineRegistration({ classInfo, onRosterChanged }: Props
     } catch { /* sidecar restarting */ }
   }, [classInfo.id, onRosterChanged])
 
-  // The phone app can decide too (Settings → Phone app): keep the list current.
+  // The phone app can decide too (the Phone App page): keep the list current.
   useEffect(() => {
     const t = setInterval(loadPending, 5_000)
     return () => clearInterval(t)

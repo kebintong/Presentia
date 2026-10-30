@@ -18,6 +18,7 @@ import SessionPage from './pages/SessionPage'
 import ReportsPage from './pages/ReportsPage'
 import ClassPickerPage from './pages/ClassPickerPage'
 import StudentsPage from './pages/StudentsPage'
+import PhonePage from './pages/PhonePage'
 import { ClassInfo, classLabel } from './classes'
 import './style.css'
 import './themes.css'
@@ -31,6 +32,8 @@ const goApp = () => (window as any)['go']?.['main']?.['App']
 
 export default function App() {
   const [page, setPage] = useState<Page>('register')
+  const [phoneOpen, setPhoneOpen] = useState(false)   // the phone app page, over any class page
+  const navigate = (p: Page) => { setPhoneOpen(false); setPage(p) }
   // The class being worked on. The app always opens on the class picker
   // (null), like the Classroom home page; every page then works on this
   // class's roster and sessions only.
@@ -39,7 +42,7 @@ export default function App() {
   const openClass = async (cls: ClassInfo) => {
     // A class with nobody in it starts on Register; otherwise straight to
     // monitoring, which is what an instructor opens a past class for.
-    setPage(cls.student_count > 0 ? 'meet' : 'register')
+    navigate(cls.student_count > 0 ? 'meet' : 'register')
     setActiveClass(cls)
     try {
       const res = await fetch(`${API}/api/classes/${cls.id}/open`, { method: 'POST' })
@@ -49,7 +52,7 @@ export default function App() {
     }
   }
 
-  const switchClass = () => setActiveClass(null)
+  const switchClass = () => { setPhoneOpen(false); setActiveClass(null) }
 
   // The engine restarting itself after a crash is reported in Activity.
   useEffect(() => listenEngineEvents(), [])
@@ -60,7 +63,7 @@ export default function App() {
   activeClassRef.current = activeClass
   useEffect(() => listenToBubble(() => {
     if (activeClassRef.current) {
-      setPage('meet')
+      navigate('meet')
     } else {
       clearPendingBubbleCmds()
       goApp()?.['ShowMainWindow']?.() // pick a class first
@@ -260,7 +263,7 @@ export default function App() {
         {/* Top Header Bar */}
         <TopBar
           activePage={page}
-          onNavigate={setPage}
+          onNavigate={navigate}
           engineReady={engineReady}
           engineMessage={engineMessage}
           engineError={engineError}
@@ -268,6 +271,7 @@ export default function App() {
           activeClass={activeClass}
           onSwitchClass={switchClass}
           bare={!!setup}
+          phoneOpen={phoneOpen}
         />
 
         {/* App Body: Slim icon sidebar + Main viewport */}
@@ -298,14 +302,18 @@ export default function App() {
             )}
             <Sidebar
               active={page}
-              onNavigate={setPage}
+              onNavigate={navigate}
               engineReady={engineReady}
               onOpenSettings={() => openSettings()}
               updateAvailable={!!update?.available}
               showNav={!!activeClass}
+              phoneOpen={phoneOpen}
+              onTogglePhone={() => setPhoneOpen((open) => !open)}
             />
             <main className="main-viewport">
-              {activeClass
+              {phoneOpen
+                ? <PhonePage />
+                : activeClass
                 ? PAGE_COMPONENTS[page]
                 : <ClassPickerPage onOpen={openClass} />}
             </main>

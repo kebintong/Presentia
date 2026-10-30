@@ -37,7 +37,7 @@ Presentia updates itself: Settings → Updates shows what's new and installs it.
 
 On first start Presentia shows a short welcome, the Terms of Use and Privacy Notice to accept, and offers the phone app.
 
-**Phone app (coming).** With a free account (email and password; created on first start or in Settings → Phone app),
+**Phone app (coming).** With a free account (email and password; created on first start or on the Phone App page, the phone icon in the sidebar),
 the teacher's classes sync with the Presentia phone app for in-person attendance, random recitation and accepting
 registrations from either device. No account is needed to use Presentia on the computer.
 

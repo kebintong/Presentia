@@ -950,7 +950,7 @@ def _sync_loop() -> None:
             if sync.signed_in():
                 _sync_now()
         except sync.SyncError:
-            pass   # shown in Settings → Phone app (sync.status()["error"])
+            pass   # shown on the Phone App page (sync.status()["error"])
         except Exception as exc:  # noqa: BLE001
             diag.record("sync", f"Phone app sync failed: {exc!r}")
 
@@ -983,7 +983,7 @@ def _sync_error(exc: "sync.SyncError") -> HTTPException:
 
 async def _account_call(fn, *args) -> dict:
     """Run an account step; once signed in, sync right away. A failed first
-    sync doesn't undo the sign-in: it shows in Settings → Phone app."""
+    sync doesn't undo the sign-in: it shows on the Phone App page."""
     try:
         out = await asyncio.to_thread(fn, *args)
     except sync.SyncError as exc:
