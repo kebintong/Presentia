@@ -47,6 +47,20 @@ cp -R presentia-desktop/build/bin/Presentia.app "$APP"
 # app.go looks for <folder of the app's executable>/sidecar/presentia-sidecar.
 cp -R dist/presentia-sidecar "$APP/Contents/MacOS/sidecar"
 
+# python.org's Python for Mac has no trusted HTTPS certificates of its own, so the
+# face-model download failed (CERTIFICATE_VERIFY_FAILED). Start the engine through
+# a launcher that points it at the certificate list bundled with it (certifi).
+SIDECAR="$APP/Contents/MacOS/sidecar"
+[ -f "$SIDECAR/_internal/certifi/cacert.pem" ] || { echo "certifi's cacert.pem is missing from the engine"; exit 1; }
+mv "$SIDECAR/presentia-sidecar" "$SIDECAR/presentia-sidecar-bin"
+cat > "$SIDECAR/presentia-sidecar" <<'LAUNCHER'
+#!/bin/sh
+here="$(cd "$(dirname "$0")" && pwd)"
+export SSL_CERT_FILE="$here/_internal/certifi/cacert.pem"
+exec "$here/presentia-sidecar-bin" "$@"
+LAUNCHER
+chmod +x "$SIDECAR/presentia-sidecar"
+
 # macOS closes an app that opens the camera without saying why it needs it.
 PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Delete :NSCameraUsageDescription" "$PLIST" 2>/dev/null || true
@@ -75,6 +89,10 @@ class_id=$(curl -sf -X POST -H 'Content-Type: application/json' -d '{"name":"Smo
 call GET "/api/classes/$class_id/export.xlsx"   # Excel export (loaded on first use)
 call GET /api/diagnostics                       # website check, HTTPS certificates
 call GET /api/perf                              # ONNX Runtime devices
+# The engine's Python with only the bundled certificate list, like the launcher sets it up.
+SSL_CERT_FILE="$SIDECAR/_internal/certifi/cacert.pem" "$VENV/bin/python" -c \
+  'import urllib.request; urllib.request.urlopen("https://github.com", timeout=30)' \
+  || { echo "HTTPS with the bundled certificates failed"; exit 1; }
 kill "$pid"; trap - EXIT
 echo "Engine OK."
 
