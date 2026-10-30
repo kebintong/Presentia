@@ -136,14 +136,15 @@ export default function App() {
   }
 
   // First start (or new terms): which screens to show, once the engine answers.
-  const [setup, setSetup] = useState<'full' | 'terms' | null>(null)
+  // undefined until the engine answers: no flash of the class list before the welcome page.
+  const [setup, setSetup] = useState<'full' | 'terms' | null | undefined>(undefined)
   useEffect(() => {
     let cancelled = false
     const ask = async () => {
       while (!cancelled) {
         try {
           const s = await (await fetch(`${API}/api/setup`)).json()
-          if (s.terms_version !== TERMS_VERSION) setSetup(!s.terms_version && !s.has_data ? 'full' : 'terms')
+          setSetup(s.terms_version === TERMS_VERSION ? null : !s.terms_version && !s.has_data ? 'full' : 'terms')
           return
         } catch { /* engine still starting */ }
         await new Promise((r) => setTimeout(r, 1000))
@@ -259,37 +260,43 @@ export default function App() {
         />
 
         {/* App Body: Slim icon sidebar + Main viewport */}
-        <div className="app-body">
-          {/* Slow-moving shapes (New Brutalism) or glows (Iridescent) behind the pages; themes.css. */}
-          {themeKey === 'brutal' && (
-            <div className="theme-deco" aria-hidden="true">
-              <span className="deco-ring" />
-              <span className="deco-block" />
-              <span className="deco-dot" />
-              <svg className="deco-squiggle" viewBox="0 0 120 40"><path d="M4 28c12-20 22-20 30 0s20 20 30 0 20-20 30 0 16 14 22 4" /></svg>
-            </div>
-          )}
-          {themeKey === 'iri' && (
-            <div className="theme-deco" aria-hidden="true">
-              <span className="deco-glow glow-1" />
-              <span className="deco-glow glow-2" />
-              <span className="deco-glow glow-3" />
-            </div>
-          )}
-          <Sidebar
-            active={page}
-            onNavigate={setPage}
-            engineReady={engineReady}
-            onOpenSettings={() => openSettings()}
-            updateAvailable={!!update?.available}
-            showNav={!!activeClass}
-          />
-          <main className="main-viewport">
-            {activeClass
-              ? PAGE_COMPONENTS[page]
-              : <ClassPickerPage onOpen={openClass} />}
-          </main>
-        </div>
+        {setup === undefined ? (
+          <main className="onboarding-page" />
+        ) : setup ? (
+          <Onboarding mode={setup} onDone={() => setSetup(null)} />
+        ) : (
+          <div className="app-body">
+            {/* Slow-moving shapes (New Brutalism) or glows (Iridescent) behind the pages; themes.css. */}
+            {themeKey === 'brutal' && (
+              <div className="theme-deco" aria-hidden="true">
+                <span className="deco-ring" />
+                <span className="deco-block" />
+                <span className="deco-dot" />
+                <svg className="deco-squiggle" viewBox="0 0 120 40"><path d="M4 28c12-20 22-20 30 0s20 20 30 0 20-20 30 0 16 14 22 4" /></svg>
+              </div>
+            )}
+            {themeKey === 'iri' && (
+              <div className="theme-deco" aria-hidden="true">
+                <span className="deco-glow glow-1" />
+                <span className="deco-glow glow-2" />
+                <span className="deco-glow glow-3" />
+              </div>
+            )}
+            <Sidebar
+              active={page}
+              onNavigate={setPage}
+              engineReady={engineReady}
+              onOpenSettings={() => openSettings()}
+              updateAvailable={!!update?.available}
+              showNav={!!activeClass}
+            />
+            <main className="main-viewport">
+              {activeClass
+                ? PAGE_COMPONENTS[page]
+                : <ClassPickerPage onOpen={openClass} />}
+            </main>
+          </div>
+        )}
       </div>
 
       <SettingsPanel
@@ -312,7 +319,6 @@ export default function App() {
       {/* Diagnostic mode: offers a report when something fails. */}
       <ProblemPrompt version={version} />
 
-      {setup && <Onboarding mode={setup} onDone={() => setSetup(null)} />}
     </>
   )
 }

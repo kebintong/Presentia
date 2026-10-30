@@ -2785,8 +2785,23 @@ select.input option {
 .diag-confirm .input { width: 100%; }
 
 /* ── First start (Onboarding.tsx) ───────────────────────────────────────── */
-.onboarding { z-index: 400; }
-.onboarding h2 { margin: 0; font-size: 20px; color: var(--ink-heading); }
+.onboarding-page {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 48px 24px;
+}
+.onboarding-content {
+  width: 100%;
+  max-width: 620px;
+  margin: auto 0;          /* centred when it fits, scrolls from the top when it doesn't */
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: page-in var(--dur-slow) var(--ease-out) backwards;
+}
+.onboarding-page h2 { margin: 0; font-size: 22px; color: var(--ink-heading); }
 .onboarding-welcome { align-items: center; text-align: center; padding: 12px 0 4px; }
 .onboarding-welcome .diag-actions { justify-content: center; }
 .terms-box {

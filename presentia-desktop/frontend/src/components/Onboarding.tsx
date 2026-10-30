@@ -46,11 +46,12 @@ export default function Onboarding({ mode, onDone }: { mode: 'full' | 'terms'; o
   const position = Math.min(steps.indexOf(step === 'account' ? 'phone' : step) + 1, steps.length)
 
   return (
-    <div className="modal-scrim onboarding">
-      <div className="settings-panel" style={{ maxWidth: step === 'terms' ? 640 : 520 }}
-           role="dialog" aria-modal="true" aria-label="Welcome to Presentia">
+    <main className="onboarding-page">
+      <div className="onboarding-content" aria-label="Welcome to Presentia">
         {steps.length > 1 && (
-          <span className="settings-row-sub" style={{ margin: 0 }}>Step {position} of {steps.length}</span>
+          <span className="settings-row-sub" style={{ margin: 0, textAlign: step === 'welcome' ? 'center' : undefined }}>
+            Step {position} of {steps.length}
+          </span>
         )}
 
         {step === 'welcome' && (
@@ -116,6 +117,6 @@ export default function Onboarding({ mode, onDone }: { mode: 'full' | 'terms'; o
           </div>
         )}
       </div>
-    </div>
+    </main>
   )
 }

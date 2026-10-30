@@ -632,6 +632,8 @@ class TermsAcceptance(BaseModel):
 async def setup_state() -> dict:
     accepted = json.loads(db.get_setting("terms_accepted") or "null") or {}
     counts = db.data_summary()
+    if os.environ.get("PRESENTIA_FIRST_START") == "1":   # testing: the first-start screens on every launch
+        return {"terms_version": None, "terms_accepted_at": None, "has_data": False}
     return {
         "terms_version": accepted.get("version"),
         "terms_accepted_at": accepted.get("at"),
