@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { API } from '../api'
 import AccountForm from './AccountForm'
 import PresentiaLogo from './PresentiaLogo'
@@ -14,11 +14,14 @@ export interface EngineState {
   error: string
 }
 
-// This window's own note of the accepted terms, so the welcome can show before
+// This window's own note of the accepted terms, so the screens can show before
 // the engine (which keeps the real record) has started.
 const TERMS_KEY = 'presentia.termsAccepted'
-export const termsAcceptedHere = () => {
-  try { return localStorage.getItem(TERMS_KEY) === TERMS_VERSION } catch { return false }
+/** What to show at start: nothing (accepted), the new terms only, or everything. */
+export const firstStartMode = (): 'full' | 'terms' | null => {
+  let seen: string | null = null
+  try { seen = localStorage.getItem(TERMS_KEY) } catch { /* storage unavailable */ }
+  return seen === TERMS_VERSION ? null : seen ? 'terms' : 'full'
 }
 export const rememberTerms = () => {
   try { localStorage.setItem(TERMS_KEY, TERMS_VERSION) } catch { /* storage unavailable */ }
@@ -37,33 +40,35 @@ export default function Onboarding({ mode, engine, onDone }: {
 }) {
   const [step, setStep] = useState<Step>(mode === 'full' ? 'welcome' : 'terms')
   const [agreed, setAgreed] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const [phoneApp, setPhoneApp] = useState(true)   // this copy can sync with the phone app (checked on accept)
+  const [phoneApp, setPhoneApp] = useState(true)   // this copy can sync with the phone app
+  const [recorded, setRecorded] = useState(false)  // the engine has the acceptance on record
+
+  useEffect(() => {
+    if (engine.up) fetch(`${API}/api/account`).then((r) => r.json()).then((a) => setPhoneApp(!!a.configured)).catch(() => {})
+  }, [engine.up])
 
   // Teachers who only re-accept the terms skip "Getting ready" when the engine already is.
-  const finish = () => (mode === 'terms' && engine.ready ? onDone() : setStep('ready'))
+  const finish = () => (mode === 'terms' && engine.ready && recorded ? onDone() : setStep('ready'))
 
-  const accept = async () => {
-    setBusy(true)
-    setError('')
-    try {
-      const res = await fetch(`${API}/api/setup/accept`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ version: TERMS_VERSION }),
-      })
-      if (!res.ok) throw new Error()
-      rememberTerms()
-      const account = await fetch(`${API}/api/account`).then((r) => r.json()).catch(() => null)
-      setPhoneApp(!!account?.configured)
-      if (mode === 'full' && account?.configured) setStep('phone')
-      else finish()
-    } catch {
-      setError('Could not save your answer. Presentia is still starting; try again in a moment.')
-    } finally {
-      setBusy(false)
+  // Accepting never waits for the engine: the acceptance is sent as soon as it answers.
+  const accept = () => {
+    rememberTerms()
+    const record = async () => {
+      for (;;) {
+        try {
+          const res = await fetch(`${API}/api/setup/accept`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ version: TERMS_VERSION }),
+          })
+          if (res.ok) return setRecorded(true)
+        } catch { /* engine still starting */ }
+        await new Promise((r) => setTimeout(r, 1500))
+      }
     }
+    record()
+    if (mode === 'full' && phoneApp) setStep('phone')
+    else finish()
   }
 
   const steps: Step[] = mode === 'full'
@@ -106,12 +111,9 @@ export default function Onboarding({ mode, engine, onDone }: {
               <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
               I have read and accept the Terms of Use and the Privacy Notice.
             </label>
-            {error && <div className="settings-msg settings-msg-error" role="alert">{error}</div>}
             <div className="diag-actions">
               {mode === 'full' && <button className="btn-ghost" onClick={() => setStep('welcome')}>Back</button>}
-              <button className="btn-primary" disabled={!agreed || busy || !engine.up} onClick={accept}>
-                {!engine.up ? 'Waiting for Presentia to start…' : busy ? 'Saving…' : 'Accept and continue'}
-              </button>
+              <button className="btn-primary" disabled={!agreed} onClick={accept}>Accept and continue</button>
             </div>
           </div>
         )}
@@ -137,6 +139,12 @@ export default function Onboarding({ mode, engine, onDone }: {
         {step === 'account' && (
           <div className="settings-section">
             <h2>Your Presentia account</h2>
+            {!engine.up && (
+              <div className="settings-msg" role="status">
+                Presentia is still starting. Signing in works once it is up, or skip and do it later in
+                Settings → Phone app.
+              </div>
+            )}
             <AccountForm onSignedIn={finish} />
             <div className="diag-actions">
               <button className="btn-ghost" onClick={finish}>Skip for now</button>
@@ -176,8 +184,8 @@ export default function Onboarding({ mode, engine, onDone }: {
               </>
             )}
             <div className="diag-actions">
-              {engine.error && <button className="btn-ghost" onClick={onDone}>Continue anyway</button>}
-              <button className="btn-primary" disabled={!engine.ready} onClick={onDone}>Open Presentia</button>
+              {engine.error && <button className="btn-ghost" disabled={!recorded} onClick={onDone}>Continue anyway</button>}
+              <button className="btn-primary" disabled={!engine.ready || !recorded} onClick={onDone}>Open Presentia</button>
             </div>
           </div>
         )}

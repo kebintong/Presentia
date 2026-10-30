@@ -17,6 +17,8 @@ interface TopBarProps {
   activeClass?: ClassInfo | null
   /** Back to the start screen to pick another class. */
   onSwitchClass?: () => void
+  /** Only the window buttons, on a see-through bar (first-start screens). */
+  bare?: boolean
 }
 
 export default function TopBar({
@@ -26,6 +28,7 @@ export default function TopBar({
   version,
   activeClass = null,
   onSwitchClass,
+  bare = false,
 }: TopBarProps) {
   // Window control actions (Wails Go binding + Runtime fallback)
   const handleMinimise = () => {
@@ -55,9 +58,9 @@ export default function TopBar({
   return (
     // No double-click-to-maximise here: it also fired when buttons on the bar
     // were double-clicked. Maximise with the window button instead.
-    <header className="top-bar">
+    <header className={`top-bar${bare ? ' top-bar-bare' : ''}`}>
       {/* Left side: "P" Brand Logo + Title */}
-      <div className="top-bar-left">
+      {bare ? <div className="top-bar-left" /> : <div className="top-bar-left">
         {/* The app icon on a tile; its colours follow the theme (themes.css). */}
         <div className="top-brand-emblem" title="Presentia">
           <BrandTile />
@@ -90,17 +93,19 @@ export default function TopBar({
           {activeClass && activePage === 'session' && 'Class Session'}
           {activeClass && activePage === 'reports' && 'Attendance Reports'}
         </span>
-      </div>
+      </div>}
 
       {/* Right side: Engine Status + Wider Window Controls */}
       <div className="top-bar-right">
         {/* Engine status indicator pill */}
-        <div className={`engine-pill ${engineReady ? 'ready' : 'loading'}`}>
-          <span className="engine-dot" />
-          <span title={engineMessage || undefined}>
-            {engineReady ? 'Engine Ready' : engineMessage || 'Starting engine…'}
-          </span>
-        </div>
+        {!bare && (
+          <div className={`engine-pill ${engineReady ? 'ready' : 'loading'}`}>
+            <span className="engine-dot" />
+            <span title={engineMessage || undefined}>
+              {engineReady ? 'Engine Ready' : engineMessage || 'Starting engine…'}
+            </span>
+          </div>
+        )}
 
 
         {/* Wider Window Controls (Minimize, Maximize, Close) */}

@@ -2830,3 +2830,6 @@ select.input option {
   border-radius: 999px; overflow: hidden; background: var(--surface-hi);
 }
 .ready-bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
+/* First-start screens: no title bar, only the window buttons (the window has no frame of its own). */
+.top-bar-bare { background: transparent; border-bottom-color: transparent; }
+.top-bar-bare .window-controls { border-left-color: transparent; }
