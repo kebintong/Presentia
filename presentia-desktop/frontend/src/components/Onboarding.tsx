@@ -14,6 +14,10 @@ export interface EngineState {
   error: string
 }
 
+// Presentia's start, to tell an engine that is slow from one that never started.
+const STARTED = Date.now()
+const ENGINE_START_LIMIT = 90_000   // a first start (virus scan of the engine) can be slow
+
 // This window's own note of the accepted terms, so the screens can show before
 // the engine (which keeps the real record) has started.
 const TERMS_KEY = 'presentia.termsAccepted'
@@ -42,6 +46,13 @@ export default function Onboarding({ mode, engine, onDone }: {
   const [agreed, setAgreed] = useState(false)
   const [phoneApp, setPhoneApp] = useState(true)   // this copy can sync with the phone app
   const [recorded, setRecorded] = useState(false)  // the engine has the acceptance on record
+  const [stalled, setStalled] = useState(false)    // the engine has not answered within the limit
+
+  useEffect(() => {
+    if (engine.up) { setStalled(false); return }
+    const t = setTimeout(() => setStalled(true), Math.max(0, STARTED + ENGINE_START_LIMIT - Date.now()))
+    return () => clearTimeout(t)
+  }, [engine.up])
 
   useEffect(() => {
     if (engine.up) fetch(`${API}/api/account`).then((r) => r.json()).then((a) => setPhoneApp(!!a.configured)).catch(() => {})
@@ -175,6 +186,14 @@ export default function Onboarding({ mode, engine, onDone }: {
                 </p>
               </>
             )}
+            {stalled && !engine.up && (
+              <div className="settings-msg settings-msg-error" role="alert" style={{ textAlign: 'left' }}>
+                Presentia's engine has not started after {ENGINE_START_LIMIT / 1000} seconds. It may still start; if
+                not, close Presentia and open it again. If it keeps happening, the engine's log is the file
+                presentia-sidecar-stderr.log in your temporary folder (on Windows, type %TEMP% in the File Explorer
+                address bar).
+              </div>
+            )}
             {engine.error && (
               <>
                 <div className="settings-msg settings-msg-error" role="alert" style={{ textAlign: 'left' }}>{engine.error}</div>
@@ -184,6 +203,9 @@ export default function Onboarding({ mode, engine, onDone }: {
               </>
             )}
             <div className="diag-actions">
+              {stalled && !engine.up && (
+                <button className="btn-ghost" onClick={() => (window as any).runtime?.Quit?.()}>Close Presentia</button>
+              )}
               {engine.error && <button className="btn-ghost" disabled={!recorded} onClick={onDone}>Continue anyway</button>}
               <button className="btn-primary" disabled={!engine.ready || !recorded} onClick={onDone}>Open Presentia</button>
             </div>
