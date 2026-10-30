@@ -10,7 +10,7 @@ import SettingsPanel, { UpdateInfo, Tab as SettingsTab } from './components/Sett
 import type { ReleaseNote } from './components/UpdateHistory'
 import UpdateNotice from './components/UpdateNotice'
 import ProblemPrompt from './components/ProblemPrompt'
-import Onboarding from './components/Onboarding'
+import Onboarding, { termsAcceptedHere, rememberTerms } from './components/Onboarding'
 import { TERMS_VERSION } from './components/TermsText'
 import RegisterPage from './pages/RegisterPage'
 import MeetPage from './pages/MeetPage'
@@ -83,6 +83,9 @@ export default function App() {
   const [engineReady, setEngineReady] = useState(false)
   // What first launch is doing (hardware check, model download progress).
   const [engineMessage, setEngineMessage] = useState('')
+  const [engineUp, setEngineUp] = useState(false)          // answering at all
+  const [engineProgress, setEngineProgress] = useState<number | null>(null)
+  const [engineError, setEngineError] = useState('')
   // One of the six looks in Settings → Appearance (see themes.ts).
   const [themeKey, setThemeKey] = useState<ThemeKey>(loadTheme)
   const info = themeInfo(themeKey)
@@ -135,15 +138,18 @@ export default function App() {
     })
   }
 
-  // First start (or new terms): which screens to show, once the engine answers.
-  const [setup, setSetup] = useState<'full' | 'terms' | null>(null)
+  // First start (or new terms). Decided at once from what this window remembers, so
+  // the welcome shows while the engine is still starting; the engine's record (the
+  // one that counts) then confirms it or switches to the terms-only screens.
+  const [setup, setSetup] = useState<'full' | 'terms' | null>(() => (termsAcceptedHere() ? null : 'full'))
   useEffect(() => {
     let cancelled = false
     const ask = async () => {
       while (!cancelled) {
         try {
           const s = await (await fetch(`${API}/api/setup`)).json()
-          if (s.terms_version !== TERMS_VERSION) setSetup(!s.terms_version && !s.has_data ? 'full' : 'terms')
+          if (s.terms_version === TERMS_VERSION) { rememberTerms(); setSetup(null) }
+          else setSetup(!s.terms_version && !s.has_data ? 'full' : 'terms')
           return
         } catch { /* engine still starting */ }
         await new Promise((r) => setTimeout(r, 1000))
@@ -161,12 +167,16 @@ export default function App() {
         try {
           const res = await fetch(`${API}/api/engine/status`)
           const data = await res.json()
+          setEngineUp(true)
           if (data.ready) {
             setEngineReady(true)
             setEngineMessage('')
+            setEngineError('')
             return
           }
           setEngineMessage(data.message || '')
+          setEngineProgress(typeof data.progress === 'number' ? data.progress : null)
+          setEngineError(data.error || '')
         } catch {
           // sidecar still starting
         }
@@ -259,37 +269,46 @@ export default function App() {
         />
 
         {/* App Body: Slim icon sidebar + Main viewport */}
-        <div className="app-body">
-          {/* Slow-moving shapes (New Brutalism) or glows (Iridescent) behind the pages; themes.css. */}
-          {themeKey === 'brutal' && (
-            <div className="theme-deco" aria-hidden="true">
-              <span className="deco-ring" />
-              <span className="deco-block" />
-              <span className="deco-dot" />
-              <svg className="deco-squiggle" viewBox="0 0 120 40"><path d="M4 28c12-20 22-20 30 0s20 20 30 0 20-20 30 0 16 14 22 4" /></svg>
-            </div>
-          )}
-          {themeKey === 'iri' && (
-            <div className="theme-deco" aria-hidden="true">
-              <span className="deco-glow glow-1" />
-              <span className="deco-glow glow-2" />
-              <span className="deco-glow glow-3" />
-            </div>
-          )}
-          <Sidebar
-            active={page}
-            onNavigate={setPage}
-            engineReady={engineReady}
-            onOpenSettings={() => openSettings()}
-            updateAvailable={!!update?.available}
-            showNav={!!activeClass}
+        {setup ? (
+          <Onboarding
+            key={setup}
+            mode={setup}
+            engine={{ up: engineUp, ready: engineReady, message: engineMessage, progress: engineProgress, error: engineError }}
+            onDone={() => setSetup(null)}
           />
-          <main className="main-viewport">
-            {activeClass
-              ? PAGE_COMPONENTS[page]
-              : <ClassPickerPage onOpen={openClass} />}
-          </main>
-        </div>
+        ) : (
+          <div className="app-body">
+            {/* Slow-moving shapes (New Brutalism) or glows (Iridescent) behind the pages; themes.css. */}
+            {themeKey === 'brutal' && (
+              <div className="theme-deco" aria-hidden="true">
+                <span className="deco-ring" />
+                <span className="deco-block" />
+                <span className="deco-dot" />
+                <svg className="deco-squiggle" viewBox="0 0 120 40"><path d="M4 28c12-20 22-20 30 0s20 20 30 0 20-20 30 0 16 14 22 4" /></svg>
+              </div>
+            )}
+            {themeKey === 'iri' && (
+              <div className="theme-deco" aria-hidden="true">
+                <span className="deco-glow glow-1" />
+                <span className="deco-glow glow-2" />
+                <span className="deco-glow glow-3" />
+              </div>
+            )}
+            <Sidebar
+              active={page}
+              onNavigate={setPage}
+              engineReady={engineReady}
+              onOpenSettings={() => openSettings()}
+              updateAvailable={!!update?.available}
+              showNav={!!activeClass}
+            />
+            <main className="main-viewport">
+              {activeClass
+                ? PAGE_COMPONENTS[page]
+                : <ClassPickerPage onOpen={openClass} />}
+            </main>
+          </div>
+        )}
       </div>
 
       <SettingsPanel
@@ -312,7 +331,6 @@ export default function App() {
       {/* Diagnostic mode: offers a report when something fails. */}
       <ProblemPrompt version={version} />
 
-      {setup && <Onboarding mode={setup} onDone={() => setSetup(null)} />}
     </>
   )
 }

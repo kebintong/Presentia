@@ -281,3 +281,10 @@ def test_terms_acceptance_is_recorded(fresh_db):
     assert out["terms_version"] == "2026-10-30" and out["terms_accepted_at"] and out["has_data"]
     fresh_db.delete_all_data()
     assert client.get("/api/setup").json()["terms_version"] == "2026-10-30"   # consent record kept
+
+
+def test_first_start_screens_can_be_forced_for_testing(fresh_db, monkeypatch):
+    client = engine_client()
+    client.post("/api/setup/accept", json={"version": "2026-10-30"})
+    monkeypatch.setenv("PRESENTIA_FIRST_START", "1")
+    assert client.get("/api/setup").json()["terms_version"] is None

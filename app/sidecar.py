@@ -282,7 +282,8 @@ async def engine_status() -> dict:
     ready = _engine_ready.is_set() and _engine_error is None
     # "message" says what first launch is busy with (hardware check, model
     # download progress) so the app can show it instead of a bare spinner.
-    return {"ready": ready, "error": _engine_error, "message": FaceEngine.status().get("message")}
+    st = FaceEngine.status()
+    return {"ready": ready, "error": _engine_error, "message": st.get("message"), "progress": st.get("progress")}
 
 
 @app.get("/api/diagnostics")
@@ -632,6 +633,8 @@ class TermsAcceptance(BaseModel):
 async def setup_state() -> dict:
     accepted = json.loads(db.get_setting("terms_accepted") or "null") or {}
     counts = db.data_summary()
+    if os.environ.get("PRESENTIA_FIRST_START") == "1":   # testing: the first-start screens on every launch
+        return {"terms_version": None, "terms_accepted_at": None, "has_data": False}
     return {
         "terms_version": accepted.get("version"),
         "terms_accepted_at": accepted.get("at"),

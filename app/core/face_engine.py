@@ -107,8 +107,9 @@ class FaceEngine:
         out = dict(cls._status)
         if fm.download_state.get("active"):
             d = fm.download_state
-            out["message"] = (f"Downloading {d['file']} "
-                              f"({d['done_mb']:.0f} of {max(d['total_mb'], d['done_mb']):.0f} MB)…")
+            total = max(d['total_mb'], d['done_mb'])
+            out["message"] = f"Downloading {d['file']} ({d['done_mb']:.0f} of {total:.0f} MB)…"
+            out["progress"] = d["done_mb"] / total if total else None
         if inst is not None:
             for key in ("backend", "device", "threads", "fell_back", "error", "profile", "detectors"):
                 out[key] = getattr(inst, key, None)
