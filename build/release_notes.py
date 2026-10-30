@@ -61,9 +61,13 @@ def body(version: str, previous: str, sha256: str, notes: str, changes: list[str
         parts += [f"## Changes since v{previous}" if previous else "## Changes", "", *changes, ""]
     parts += [
         "## Download", "",
-        "Download **PresentiaSetup.exe** below and run it. Installed copies offer this update "
-        "in Settings → Updates.", "",
-        f"SHA-256: `{sha256}`",
+        "**Windows:** download **PresentiaSetup.exe** below and run it. Installed copies offer this "
+        "update in Settings → Updates.", "",
+        f"SHA-256: `{sha256}`", "",
+        "**Mac (Intel, macOS 13 or later):** download **Presentia-mac-intel.dmg** (added a few minutes "
+        "after the Windows installer, with its SHA-256 in Presentia-mac-intel.dmg.sha256) and drag "
+        "Presentia to Applications. It is not signed: the first time, open System Settings → Privacy & "
+        "Security and choose Open Anyway.",
     ]
     return "\n".join(parts) + "\n"
 

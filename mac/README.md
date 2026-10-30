@@ -4,7 +4,9 @@ Everything Mac-only lives in this folder. The Windows app, its installer and its
 the Mac build reuses the same app code (`app/`, `presentia-desktop/`) and the same engine build file
 (`build/presentia-sidecar.spec`).
 
-**Status: first version, unsigned, built on your own Mac.**
+**Status: first version, unsigned.** Every release includes `Presentia-mac-intel.dmg`, built by GitHub Actions
+([`mac-build.yml`](../.github/workflows/mac-build.yml) on an Intel Mac runner); you can also build it on your own
+Mac (below).
 
 ## What works and what doesn't (yet)
 
@@ -68,8 +70,9 @@ on first launch (about 195 MB), like on Windows.
 
 ## Updates
 
-Releases contain only the Windows installer, so the Mac app doesn't offer updates. Build the new version with
-`mac/build.sh` and drag it into Applications again; your data stays.
+The Mac app doesn't offer updates itself yet. Download `Presentia-mac-intel.dmg` from the newest
+[release](https://github.com/kebintong/Presentia/releases/latest) (or build it with `mac/build.sh`) and drag it
+into Applications again; your data stays.
 
 ## Running from source (for development)
 
@@ -87,6 +90,8 @@ cd presentia-desktop && wails dev
 
 - **Signing and notarization** (Apple Developer ID, $99/year): removes "Open Anyway" and keeps the camera and
   screen permissions after each update (an unsigned app may ask again).
-- **A GitHub Actions build** that publishes the `.dmg` with each release.
+- **Update notices on Mac** that point at the new `.dmg` (the update check is off on Mac for now).
+- **After fall 2027:** GitHub plans to retire its Intel Mac runners (`macos-15-intel`); the CI build then needs
+  another runner, or Apple Silicon builds.
 - **Apple Silicon** builds (`darwin/arm64`).
 - Window capture (ScreenCaptureKit) and the bubble for Mac.

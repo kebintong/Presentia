@@ -10,6 +10,10 @@
 #    tags it, and creates the GitHub release with PresentiaSetup.exe and its
 #    SHA-256 checksum.
 #
+# 5. On an Intel Mac (mac-build.yml): builds the same tag with mac/build.sh and
+#    attaches Presentia-mac-intel.dmg and its SHA-256 to the release. If only
+#    this fails, the Windows release stands; re-run the failed Mac job.
+#
 # With "Publish right away" ticked (the default) and notes written, the
 # release goes straight to installed copies. With nothing under "Next
 # release", or the box unticked, it stays a DRAFT: open it, edit, Publish.
@@ -213,3 +217,10 @@ jobs:
             "Draft release created - $where (open it, check the notes, press Publish)"
           }
           $summary | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+
+  mac:
+    name: Mac installer
+    needs: [validate, build]
+    uses: ./.github/workflows/mac-build.yml
+    with:
+      tag: v${{ needs.validate.outputs.version }}
