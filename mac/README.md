@@ -60,6 +60,8 @@ instead of on a teacher's Mac.
 1. Open the `.dmg` and drag **Presentia** to **Applications**.
 2. Open it. The app is **not signed**, so a Mac that downloaded it will say it can't check it:
    **System Settings → Privacy & Security →** scroll down → **Open Anyway**. (Only the first time.)
+   If it says Presentia **"is damaged"** (older downloads), run
+   `xattr -cr /Applications/Presentia.app` in Terminal, then open it again.
 3. Allow the **camera** when asked (registration and check-in). The first try after allowing it can fail: press
    Start again.
 4. For **screen area** monitoring: **System Settings → Privacy & Security → Screen & System Audio Recording**,

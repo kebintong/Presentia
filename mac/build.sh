@@ -45,12 +45,15 @@ step "Put the engine inside the app"
 rm -rf "$OUT" && mkdir -p "$OUT"
 cp -R presentia-desktop/build/bin/Presentia.app "$APP"
 # app.go looks for <folder of the app's executable>/sidecar/presentia-sidecar.
-cp -R dist/presentia-sidecar "$APP/Contents/MacOS/sidecar"
+# The engine's files live in Resources with a link from MacOS: code signing
+# expects only programs in MacOS, and the engine also has data files.
+cp -R dist/presentia-sidecar "$APP/Contents/Resources/sidecar"
+ln -s ../Resources/sidecar "$APP/Contents/MacOS/sidecar"
 
 # python.org's Python for Mac has no trusted HTTPS certificates of its own, so the
 # face-model download failed (CERTIFICATE_VERIFY_FAILED). Start the engine through
 # a launcher that points it at the certificate list bundled with it (certifi).
-SIDECAR="$APP/Contents/MacOS/sidecar"
+SIDECAR="$APP/Contents/Resources/sidecar"
 [ -f "$SIDECAR/_internal/certifi/cacert.pem" ] || { echo "certifi's cacert.pem is missing from the engine"; exit 1; }
 mv "$SIDECAR/presentia-sidecar" "$SIDECAR/presentia-sidecar-bin"
 cat > "$SIDECAR/presentia-sidecar" <<'LAUNCHER'
@@ -68,6 +71,12 @@ PLIST="$APP/Contents/Info.plist"
 # The engine's newest Intel builds (onnxruntime) need macOS 13 Ventura.
 /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 13.0" "$PLIST" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 13.0" "$PLIST"
+
+# A downloaded app with no signature, or one the steps above broke, is called
+# "damaged" by macOS and can't be opened at all. An ad-hoc signature (not Apple
+# Developer ID) fixes that: the Mac still asks once (Open Anyway).
+codesign --force --sign - "$APP"
+codesign --verify --strict --verbose=2 "$APP"
 
 step "Start the engine once"
 port=7799
