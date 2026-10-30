@@ -10,7 +10,7 @@ import SettingsPanel, { UpdateInfo, Tab as SettingsTab } from './components/Sett
 import type { ReleaseNote } from './components/UpdateHistory'
 import UpdateNotice from './components/UpdateNotice'
 import ProblemPrompt from './components/ProblemPrompt'
-import Onboarding, { termsAcceptedHere, rememberTerms } from './components/Onboarding'
+import Onboarding, { firstStartMode, rememberTerms } from './components/Onboarding'
 import { TERMS_VERSION } from './components/TermsText'
 import RegisterPage from './pages/RegisterPage'
 import MeetPage from './pages/MeetPage'
@@ -139,17 +139,17 @@ export default function App() {
   }
 
   // First start (or new terms). Decided at once from what this window remembers, so
-  // the welcome shows while the engine is still starting; the engine's record (the
-  // one that counts) then confirms it or switches to the terms-only screens.
-  const [setup, setSetup] = useState<'full' | 'terms' | null>(() => (termsAcceptedHere() ? null : 'full'))
+  // the screens show while the engine is still starting. The engine's record (the
+  // one that counts) can still ask for them, but never closes them halfway.
+  const [setup, setSetup] = useState<'full' | 'terms' | null>(firstStartMode)
   useEffect(() => {
     let cancelled = false
     const ask = async () => {
       while (!cancelled) {
         try {
           const s = await (await fetch(`${API}/api/setup`)).json()
-          if (s.terms_version === TERMS_VERSION) { rememberTerms(); setSetup(null) }
-          else setSetup(!s.terms_version && !s.has_data ? 'full' : 'terms')
+          if (s.terms_version === TERMS_VERSION) rememberTerms()
+          else setSetup((shown) => shown ?? (!s.terms_version && !s.has_data ? 'full' : 'terms'))
           return
         } catch { /* engine still starting */ }
         await new Promise((r) => setTimeout(r, 1000))
@@ -266,6 +266,7 @@ export default function App() {
           version={version}
           activeClass={activeClass}
           onSwitchClass={switchClass}
+          bare={!!setup}
         />
 
         {/* App Body: Slim icon sidebar + Main viewport */}
