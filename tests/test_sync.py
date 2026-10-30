@@ -214,18 +214,70 @@ def test_signed_out_nothing_is_claimed(fresh_db):
     assert client.post(f"/api/pending/{p['id']}/approve").status_code == 200
 
 
-def test_sign_in_with_a_code_or_the_emailed_link(fresh_db, monkeypatch):
+def test_account_sign_up_sign_in_and_reset(fresh_db, monkeypatch):
     from app.data import sync
 
     sent = []
     session = {"access_token": "a", "refresh_token": "r", "expires_in": 3600,
                "user": {"id": "u1", "email": "t@school.edu"}}
-    monkeypatch.setenv("PRESENTIA_SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.setattr(sync, "_http", lambda method, path, body=None, **kw: sent.append(body) or session)
 
-    sync.verify("t@school.edu", " 123456 ")
-    sync.verify("t@school.edu", "https://example.supabase.co/auth/v1/verify?token=ab12cd&type=magiclink"
-                                "&redirect_to=https://presentia.example")
-    assert sent == [{"type": "email", "email": "t@school.edu", "token": "123456"},
-                    {"type": "magiclink", "token_hash": "ab12cd"}]
+    def fake(method, path, body=None, **kw):
+        sent.append((method, path.split("?")[0], body))
+        return {"id": "u1"} if path == "/auth/v1/signup" else session   # sign-up: confirm by code
+
+    monkeypatch.setenv("PRESENTIA_SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setattr(sync, "_http", fake)
+
+    assert sync.sign_up("t@school.edu", "secret-pass")["needs_code"] and not sync.signed_in()
+    sync.confirm("t@school.edu", " 123456 ")
+    assert sync.signed_in() and sync.status()["email"] == "t@school.edu"
+    sync.sign_out()
+    # The emailed link pasted whole works like the code (template still sends a link).
+    sync.confirm("t@school.edu", "https://example.supabase.co/auth/v1/verify?token=ab12cd&type=signup"
+                                 "&redirect_to=https://presentia.example")
+    sync.sign_in("t@school.edu", "secret-pass")
+    sync.reset_password("t@school.edu", "654321", "new-secret")
+    assert [(m, p, b) for m, p, b in sent if p != "/auth/v1/logout"] == [
+        ("POST", "/auth/v1/signup", {"email": "t@school.edu", "password": "secret-pass"}),
+        ("POST", "/auth/v1/verify", {"type": "signup", "email": "t@school.edu", "token": "123456"}),
+        ("POST", "/auth/v1/verify", {"type": "signup", "token_hash": "ab12cd"}),
+        ("POST", "/auth/v1/token", {"email": "t@school.edu", "password": "secret-pass"}),
+        ("POST", "/auth/v1/verify", {"type": "recovery", "email": "t@school.edu", "token": "654321"}),
+        ("PUT", "/auth/v1/user", {"password": "new-secret"}),
+    ]
     assert sync.signed_in()
+
+
+def test_a_failed_password_change_leaves_you_signed_out(fresh_db, monkeypatch):
+    from app.data import sync
+
+    session = {"access_token": "a", "refresh_token": "r", "expires_in": 3600, "user": {"id": "u1"}}
+
+    def fake(method, path, body=None, **kw):
+        if method == "PUT":
+            raise sync.SyncError("Password is too weak.", 422)
+        return session
+
+    monkeypatch.setenv("PRESENTIA_SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setattr(sync, "_http", fake)
+    with pytest.raises(sync.SyncError):
+        sync.reset_password("t@school.edu", "654321", "x")
+    assert not sync.signed_in()
+
+
+def test_account_endpoints_check_input(fresh_db):
+    client = engine_client()
+    assert client.post("/api/account/sign-up", json={"email": "t@school.edu", "password": "short"}).status_code == 400
+    assert client.post("/api/account/sign-in", json={"email": "nope", "password": "x" * 8}).status_code == 400
+    assert client.post("/api/account/reset", json={"email": "t@school.edu", "password": "x" * 8}).status_code == 400
+
+
+def test_terms_acceptance_is_recorded(fresh_db):
+    client = engine_client()
+    first = client.get("/api/setup").json()
+    assert first["terms_version"] is None and first["has_data"] is False
+    fresh_db.create_class("IT 301")
+    out = client.post("/api/setup/accept", json={"version": "2026-10-30"}).json()
+    assert out["terms_version"] == "2026-10-30" and out["terms_accepted_at"] and out["has_data"]
+    fresh_db.delete_all_data()
+    assert client.get("/api/setup").json()["terms_version"] == "2026-10-30"   # consent record kept

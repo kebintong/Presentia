@@ -35,8 +35,11 @@ Presentia updates itself: Settings → Updates shows what's new and installs it.
    ask a student to blink or turn their head to prove they're live.
 4. **Review attendance** on the Students and Reports pages, correct it if needed, and export to Excel.
 
-**Phone app (coming).** Signed in under Settings → Phone app, the teacher's classes sync with the Presentia phone app
-for in-person attendance, random recitation and accepting registrations from either device.
+On first start Presentia shows a short welcome, the Terms of Use and Privacy Notice to accept, and offers the phone app.
+
+**Phone app (coming).** With a free account (email and password; created on first start or in Settings → Phone app),
+the teacher's classes sync with the Presentia phone app for in-person attendance, random recitation and accepting
+registrations from either device. No account is needed to use Presentia on the computer.
 
 ## Privacy and data
 
@@ -49,6 +52,8 @@ for in-person attendance, random recitation and accepting registrations from eit
   14 days. No face template is made or stored there.
 - **Diagnostic reports are sent only when the teacher presses Send**, after seeing the whole report.
 - **Settings → Data → Delete all data** removes every class, student, face and attendance record.
+- The app's Terms of Use and Privacy Notice (`presentia-desktop/frontend/src/components/TermsText.tsx`) are a draft;
+  the version a teacher accepted, and when, is kept on the computer.
 - The website's privacy notice refers to the Philippine **Data Privacy Act of 2012**; have your school's data
   protection officer review it before use.
 
