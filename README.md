@@ -20,7 +20,8 @@ with the class join code.
 ## Download and install
 
 1. Download **`PresentiaSetup.exe`** from the [latest release](https://github.com/kebintong/Presentia/releases/latest)
-   and run it (Windows 10 or 11, 64-bit).
+   and run it (Windows 10 or 11, 64-bit). On an Intel Mac (macOS 13 or later), download
+   **`Presentia-mac-intel.dmg`** instead; see [`mac/README.md`](mac/README.md).
 2. On first launch Presentia downloads its face models (about 180 MB, once).
 
 Presentia updates itself: Settings → Updates shows what's new and installs it.
@@ -103,7 +104,8 @@ Details, and building by hand, are in [`build/BUILD.md`](build/BUILD.md).
 |---|---|---|
 | [CI](.github/workflows/ci.yml) | every push and pull request | Python tests, frontend build, Windows build of the desktop app, website dry run, Supabase rules on Postgres; on `main`, deploys the website when `web/` changed |
 | [Engine build](.github/workflows/engine-build.yml) | engine changes | builds the frozen engine on Windows and starts it once |
-| [Release](.github/workflows/release.yml) | by hand | builds the installer, tags the version, drafts the release |
+| [Release](.github/workflows/release.yml) | by hand | builds the installer, tags the version, drafts the release, then adds the Mac disk image |
+| [Mac build](.github/workflows/mac-build.yml) | Mac build changes, and every release | builds the Intel Mac app and its `.dmg`, starts its engine once |
 | [Dependabot](.github/dependabot.yml) | monthly | update pull requests for GitHub Actions, npm and Go |
 
 ## License

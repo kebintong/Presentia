@@ -1,0 +1,87 @@
+# The Mac (Intel) app: runs mac/build.sh on an Intel Mac runner and keeps the
+# disk image (Presentia-mac-intel.dmg, unsigned) as an artifact.
+#
+# - On changes to the Mac build, its Python dependencies or the engine's build
+#   list: checks that the Mac app still builds and its engine starts.
+# - From the Release workflow (with `tag`): builds that tagged version and
+#   attaches the disk image and its SHA-256 to the release.
+name: Mac build
+
+on:
+  push:
+    branches: [main]
+    paths: ["mac/**", "requirements.txt", "build/presentia-sidecar.spec", ".github/workflows/mac-build.yml"]
+  pull_request:
+    paths: ["mac/**", "requirements.txt", "build/presentia-sidecar.spec", ".github/workflows/mac-build.yml"]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.7.4) to build and attach the disk image to"
+        required: true
+        type: string
+
+concurrency:
+  group: mac-build-${{ inputs.tag || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # attach the disk image to the release (read-only for pull requests from forks)
+
+jobs:
+  mac:
+    name: Mac app (Intel)
+    # GitHub's Intel Macs; macos-13 was retired in December 2025.
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}   # empty outside releases: the pushed commit
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: presentia-desktop/frontend/package-lock.json
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: presentia-desktop/go.mod
+          cache-dependency-path: presentia-desktop/go.sum
+
+      - name: Install the Wails CLI (same version as go.mod)
+        run: |
+          wails_version="$(grep -oE 'github.com/wailsapp/wails/v2 v[0-9.]+' presentia-desktop/go.mod | cut -d' ' -f2)"
+          go install "github.com/wailsapp/wails/v2/cmd/wails@$wails_version"
+
+      - name: Build the Mac app and start its engine once
+        run: bash mac/build.sh
+
+      - name: Checksum
+        working-directory: mac/dist
+        run: |
+          shasum -a 256 Presentia-mac-intel.dmg > Presentia-mac-intel.dmg.sha256
+          echo "Mac disk image: $(du -h Presentia-mac-intel.dmg | cut -f1), SHA-256 $(cut -d' ' -f1 Presentia-mac-intel.dmg.sha256)" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Presentia-mac-intel${{ inputs.tag && format('-{0}', inputs.tag) || '' }}
+          path: |
+            mac/dist/Presentia-mac-intel.dmg
+            mac/dist/Presentia-mac-intel.dmg.sha256
+          retention-days: 14
+
+      - name: Attach to the release
+        if: inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release upload "$TAG" --clobber \
+            mac/dist/Presentia-mac-intel.dmg mac/dist/Presentia-mac-intel.dmg.sha256
+          echo "Attached Presentia-mac-intel.dmg to $TAG" >> "$GITHUB_STEP_SUMMARY"
