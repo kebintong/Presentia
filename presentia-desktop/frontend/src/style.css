@@ -2833,3 +2833,4 @@ select.input option {
 /* First-start screens: no title bar, only the window buttons (the window has no frame of its own). */
 .top-bar-bare { background: transparent; border-bottom-color: transparent; }
 .top-bar-bare .window-controls { border-left-color: transparent; }
+.engine-pill.error { color: var(--danger); border-color: var(--danger); }

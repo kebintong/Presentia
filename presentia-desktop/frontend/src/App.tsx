@@ -263,6 +263,7 @@ export default function App() {
           onNavigate={setPage}
           engineReady={engineReady}
           engineMessage={engineMessage}
+          engineError={engineError}
           version={version}
           activeClass={activeClass}
           onSwitchClass={switchClass}

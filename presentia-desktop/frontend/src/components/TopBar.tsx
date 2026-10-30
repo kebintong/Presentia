@@ -11,6 +11,8 @@ interface TopBarProps {
   engineReady: boolean
   /** Startup detail while the engine is not ready yet (e.g. download progress). */
   engineMessage?: string
+  /** Why the engine could not load the face models, if it failed. */
+  engineError?: string
   /** Build version, shown beside the title. Empty outside the desktop shell. */
   version?: string
   /** The open class; null on the start screen. */
@@ -25,6 +27,7 @@ export default function TopBar({
   activePage,
   engineReady,
   engineMessage = '',
+  engineError = '',
   version,
   activeClass = null,
   onSwitchClass,
@@ -99,10 +102,10 @@ export default function TopBar({
       <div className="top-bar-right">
         {/* Engine status indicator pill */}
         {!bare && (
-          <div className={`engine-pill ${engineReady ? 'ready' : 'loading'}`}>
+          <div className={`engine-pill ${engineReady ? 'ready' : engineError ? 'error' : 'loading'}`}>
             <span className="engine-dot" />
-            <span title={engineMessage || undefined}>
-              {engineReady ? 'Engine Ready' : engineMessage || 'Starting engine…'}
+            <span title={engineError ? `${engineError} (Settings → Diagnostics shows more)` : engineMessage || undefined}>
+              {engineReady ? 'Engine Ready' : engineError ? "Face models didn't load" : engineMessage || 'Starting engine…'}
             </span>
           </div>
         )}
