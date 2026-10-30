@@ -11,6 +11,8 @@ version and starts a new empty "Next release" section.
 
 <!-- Write what changed for teachers here, as short bullet points. -->
 
+## 1.7.7 — 2026-10-30
+
 - **Phone App:** signing in with a different account than before no longer stops syncing with "new row violates row-level security policy". The new account gets its own copy of your classes; the old account keeps what it had.
 
 ## 1.6.3 — 2026-10-08
