@@ -45,6 +45,7 @@ _BATCH = 200
 
 _K_EMAIL, _K_USER, _K_REFRESH = "sync_email", "sync_user", "sync_refresh_token"
 _K_CURSOR, _K_LAST = "sync_cursor", "sync_last"
+_K_OWNER = "sync_owner"   # the account this computer's rows were uploaded to; kept after signing out
 _BLOBS = ("embedding", "photo_jpeg")
 
 
@@ -246,6 +247,7 @@ def run(preview: Preview, apply: Apply) -> None:
     global _last_error
     with _lock:
         try:
+            _own_ids(db.get_setting(_K_USER) or "")
             _push(preview)
             _pull(apply)
         except SyncError as exc:
@@ -263,6 +265,19 @@ def _local_ts(remote: str) -> str:
     """Supabase's '2026-10-29T02:41:07.506+00:00' in this database's format."""
     dt = datetime.fromisoformat(remote).astimezone(timezone.utc)
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _own_ids(user: str) -> None:
+    """Rows already uploaded to another account keep their ids there, and
+    Supabase refuses the same ids for this one ("new row violates row-level
+    security policy"). Give every row a new id so this account gets its own copy."""
+    if not user or db.get_setting(_K_OWNER) == user:
+        return
+    with db._connect() as conn:  # noqa: SLF001
+        for table in db.SYNC_TABLES:
+            conn.execute(f"UPDATE {table} SET uid = {db._SQL_UUID}, dirty = 1")  # noqa: SLF001
+        conn.execute("DELETE FROM sync_deleted")   # deletes of the other account's rows
+    db.set_setting(_K_OWNER, user)
 
 
 def _push(preview: Preview) -> None:

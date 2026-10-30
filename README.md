@@ -53,8 +53,9 @@ registrations from either device. No account is needed to use Presentia on the c
   14 days. No face template is made or stored there.
 - **Diagnostic reports are sent only when the teacher presses Send**, after seeing the whole report.
 - **Settings → Data → Delete all data** removes every class, student, face and attendance record.
-- The app's Terms of Use and Privacy Notice (`presentia-desktop/frontend/src/components/TermsText.tsx`) are a draft;
-  the version a teacher accepted, and when, is kept on the computer.
+- Teachers accept the app's Terms of Use and Privacy Notice
+  (`presentia-desktop/frontend/src/components/TermsText.tsx`) on first start; the version they accepted, and when,
+  is kept on the computer.
 - The website's privacy notice refers to the Philippine **Data Privacy Act of 2012**; have your school's data
   protection officer review it before use.
 

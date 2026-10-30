@@ -1,10 +1,9 @@
 /**
  * Terms of Use and Privacy Notice shown on first start (Onboarding.tsx).
  *
- * DRAFT written by the developer: have the school's data protection officer
- * review it before release. Change TERMS_VERSION whenever the text changes in
- * substance: every teacher is then asked to accept it again, and the engine
- * records which version they accepted and when (/api/setup).
+ * Change TERMS_VERSION whenever the text changes in substance: every teacher
+ * is then asked to accept it again, and the engine records which version they
+ * accepted and when (/api/setup).
  */
 export const TERMS_VERSION = '2026-10-30'
 
