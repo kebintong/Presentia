@@ -282,7 +282,8 @@ async def engine_status() -> dict:
     ready = _engine_ready.is_set() and _engine_error is None
     # "message" says what first launch is busy with (hardware check, model
     # download progress) so the app can show it instead of a bare spinner.
-    return {"ready": ready, "error": _engine_error, "message": FaceEngine.status().get("message")}
+    st = FaceEngine.status()
+    return {"ready": ready, "error": _engine_error, "message": st.get("message"), "progress": st.get("progress")}
 
 
 @app.get("/api/diagnostics")

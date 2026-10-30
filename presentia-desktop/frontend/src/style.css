@@ -2817,3 +2817,16 @@ select.input option {
 .terms-text p, .terms-text ul { margin: 0 0 8px; }
 .terms-text ul { padding-left: 18px; }
 .terms-text li { margin-bottom: 4px; }
+.ready-spinner { width: 34px; height: 34px; border-width: 3px; }
+.ready-mark {
+  width: 46px; height: 46px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 24px; font-weight: 700;
+  color: var(--on-accent); background: var(--accent);
+}
+.ready-status { margin: 0; font-size: 14px; color: var(--ink-heading); }
+.ready-bar {
+  width: 100%; max-width: 420px; height: 8px;
+  border-radius: 999px; overflow: hidden; background: var(--surface-hi);
+}
+.ready-bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
