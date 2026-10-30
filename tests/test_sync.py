@@ -108,6 +108,22 @@ def test_local_data_is_uploaded_once(api, fresh_db):
     assert cloud.tables["students"][student["id"]]["name"] == "Juan Dela Cruz"
 
 
+def test_another_account_gets_its_own_copy(api, fresh_db):
+    from app.data import sync
+
+    client, sync_now, cloud = api
+    fresh_db.create_class("IT 301")
+    fresh_db.set_setting(sync._K_USER, "teacher-a")
+    sync_now()
+    [first] = cloud.tables["classes"]
+    sync_now()
+    assert list(cloud.tables["classes"]) == [first]   # same account: same rows
+
+    fresh_db.set_setting(sync._K_USER, "teacher-b")   # Supabase refuses teacher A's ids for B
+    sync_now()
+    assert len(cloud.tables["classes"]) == 2 and first in cloud.tables["classes"]
+
+
 def test_phone_attendance_comes_down(api, fresh_db):
     client, sync_now, cloud = api
     cls = fresh_db.create_class("IT 301")

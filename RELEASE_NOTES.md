@@ -11,6 +11,8 @@ version and starts a new empty "Next release" section.
 
 <!-- Write what changed for teachers here, as short bullet points. -->
 
+- **Phone App:** signing in with a different account than before no longer stops syncing with "new row violates row-level security policy". The new account gets its own copy of your classes; the old account keeps what it had.
+
 ## 1.6.3 — 2026-10-08
 
 - **Share the meeting's browser tab.** New **Browser Tab** choice on the Meeting Monitor and the bubble: Presentia watches the Meet (or Zoom / Teams web) tab itself, the way sharing a tab in Meet works, so monitoring keeps going while you switch to other apps or tabs — no more "completely covered and has stopped updating". Works in Chrome, Edge and Brave; Presentia opens a small page in your meeting's browser where you pick the tab.
