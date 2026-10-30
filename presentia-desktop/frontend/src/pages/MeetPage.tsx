@@ -16,6 +16,8 @@ import { API } from '../api'
 
 // Bindings added after the generated wailsjs files; called defensively.
 const goApp = () => (window as any)['go']?.['main']?.['App']
+// The bubble, picking a window and hiding Presentia from screen captures are Windows-only.
+const IS_WINDOWS = navigator.userAgent.includes('Windows')
 
 type RosterStudent = VerifyStudent
 
@@ -521,7 +523,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
               </button>
             )}
             {/* Open / Close Bubble button */}
-            {!bubbleOpen ? (
+            {IS_WINDOWS && (!bubbleOpen ? (
               <button className="btn-hero-launch" onClick={() => { OpenBubble(); setBubbleOpen(true) }}
                 disabled={pickLoading}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -537,7 +539,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                 </svg>
                 Close Bubble
               </button>
-            )}
+            ))}
           </div>
         </div>
 
@@ -545,13 +547,22 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
             <circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>
           </svg>
-          <span>
-            Pick what to watch — <strong>Browser Tab</strong> for a meeting in Chrome, Edge or Brave (keeps
-            going while you use other apps), <strong>Select Window</strong> for the Zoom or Teams app, or
-            <strong> Screen Area</strong> — then press <strong>Start Monitoring</strong>. <strong>Open Bubble</strong> puts the same controls in a
-            floating circle that stays above Google Meet while you teach. Click a student in the roster
-            to run a liveness check if their video looks suspicious.
-          </span>
+          {IS_WINDOWS ? (
+            <span>
+              Pick what to watch — <strong>Browser Tab</strong> for a meeting in Chrome, Edge or Brave (keeps
+              going while you use other apps), <strong>Select Window</strong> for the Zoom or Teams app, or
+              <strong> Screen Area</strong> — then press <strong>Start Monitoring</strong>. <strong>Open Bubble</strong> puts the same controls in a
+              floating circle that stays above Google Meet while you teach. Click a student in the roster
+              to run a liveness check if their video looks suspicious.
+            </span>
+          ) : (
+            <span>
+              Pick what to watch — <strong>Browser Tab</strong> (recommended: Presentia sees only the meeting,
+              in Chrome, Edge or Brave) or <strong>Screen Area</strong>, keeping the Presentia window outside the
+              area — then press <strong>Start Monitoring</strong>. Click a student in the roster to run a
+              liveness check if their video looks suspicious.
+            </span>
+          )}
         </div>
       </section>
 
@@ -587,12 +598,15 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                   ? (region.browser
                     ? 'A browser stops drawing this window when it is fully covered — Browser Tab keeps going'
                     : 'Followed when it moves, even behind other windows (not when minimised)')
-                  : `${region.width} × ${region.height} px at ${region.left}, ${region.top}`}
+                  : `${region.width} × ${region.height} px at ${region.left}, ${region.top}`
+                    + (IS_WINDOWS ? '' : ' · keep the Presentia window outside this area')}
               </div>
             </>
           ) : (
             <div className="source-sub">
-              Share the meeting's browser tab, pick the Zoom / Teams window, or drag over the video tiles.
+              {IS_WINDOWS
+                ? "Share the meeting's browser tab, pick the Zoom / Teams window, or drag over the video tiles."
+                : "Share the meeting's browser tab, or drag over the video tiles."}
             </div>
           )}
         </div>
@@ -613,12 +627,14 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                 </svg>
                 {pickLoading ? 'Capturing…' : region && !region.hwnd && !region.tab ? 'Change Area' : 'Screen Area'}
               </button>
-              <button className="btn-ghost" onClick={openWinPickerFn}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/>
-                </svg>
-                {region?.hwnd ? 'Change Window' : 'Select Window'}
-              </button>
+              {IS_WINDOWS && (
+                <button className="btn-ghost" onClick={openWinPickerFn}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/>
+                  </svg>
+                  {region?.hwnd ? 'Change Window' : 'Select Window'}
+                </button>
+              )}
               {region && (
                 <button className="btn-icon source-clear" onClick={clearSource} title="Clear selection" aria-label="Clear selection">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
@@ -738,7 +754,7 @@ export default function MeetPage({ classInfo }: { classInfo: ClassInfo }) {
                   <circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>
                 </svg>
                 <p style={{ fontSize: 13, textAlign: 'center', maxWidth: 260 }}>
-                  Choose <strong>Browser Tab</strong>, <strong>Select Window</strong> or <strong>Screen Area</strong>{' '}
+                  Choose <strong>Browser Tab</strong>{IS_WINDOWS ? <>, <strong>Select Window</strong> </> : ' '}or <strong>Screen Area</strong>{' '}
                   above to tell Presentia which part of the meeting to watch.
                 </p>
               </div>

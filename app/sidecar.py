@@ -2240,7 +2240,13 @@ async def ws_camera(websocket: WebSocket) -> None:  # noqa: C901 – intentional
 
         cap, first = open_fast_capture(0)
         if cap is None:
-            _push({"type": "error", "message": "Could not open camera"})
+            message = "Could not open camera"
+            if sys.platform == "darwin":
+                # macOS asks for camera access on first use, and that first attempt fails.
+                message = ("Could not open the camera. If macOS just asked to allow camera access, allow it "
+                           "and press Start again. Otherwise turn on Presentia in System Settings → "
+                           "Privacy & Security → Camera.")
+            _push({"type": "error", "message": message})
             return
         min_gap = 1.0 / 30.0  # some virtual cameras return frames instantly
         preview_gap = 1.0 / prof["preview_fps"]
