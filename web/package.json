@@ -12,7 +12,7 @@
     "deploy": "npm run assets && wrangler deploy"
   },
   "devDependencies": {
-    "@mediapipe/tasks-vision": "1.0.1",
-    "wrangler": "^4.147.0"
+    "@mediapipe/tasks-vision": "1.2.0",
+    "wrangler": "^4.155.0"
   }
 }
